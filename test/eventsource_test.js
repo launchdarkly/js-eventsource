@@ -1268,3 +1268,31 @@ describe('Proxying', function () {
     })
   })
 })
+
+describe('REPORT method', function () {
+  it('declares support for setting method', function () {
+    assert.equal(true, EventSource.supportsSettingMethod)
+  })
+
+  it('performs REPORT request when method set to REPORT', function (done) {
+    createServer(function (err, server) {
+      if (err) return done(err)
+
+      server.on('request', function (req, res) {
+        res.writeHead(200, {'Content-Type': 'text/event-stream'})
+        if (req.method === 'REPORT') {
+          res.write('data: report\n\n')
+        } else {
+          res.write('data: not report\n\n')
+        }
+        res.write(':')
+      })
+
+      var es = new EventSource(server.url, {method: 'REPORT'})
+      es.onmessage = function (m) {
+        assert.equal(m.data, 'report')
+        server.close(done)
+      }
+    })
+  })
+})
