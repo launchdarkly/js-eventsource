@@ -5,7 +5,7 @@ This library is a pure JavaScript implementation of the [EventSource](https://ht
 You can use it with Node.js or as a browser polyfill for
 [browsers that don't have native `EventSource` support](http://caniuse.com/#feat=eventsource).
 
-This is a fork of the original [EventSource](https://github.com/EventSource/eventsource) project by Aslak Hellesøy, with additions to support the requirements of the LaunchDarkly Node and Electron SDKs. Note that as described in the [changelog](CHANGELOG.md), the API is _not_ backward-compatible with the original package, although it can be used with minimal changes.
+This is a fork of the original [EventSource](https://github.com/EventSource/eventsource) project by Aslak Hellesøy, with additions to support the requirements of the LaunchDarkly SDKs. Note that as described in the [changelog](CHANGELOG.md), the API is _not_ backward-compatible with the original package, although it can be used with minimal changes.
 
 ## Install
 
@@ -24,7 +24,7 @@ This is a fork of the original [EventSource](https://github.com/EventSource/even
 Just add `example/eventsource-polyfill.js` file to your web page:
 
 ```html
-<script src=/eventsource-polyfill.js></script>
+<script src="/eventsource-polyfill.js"></script>
 ```
 
 Now you will have two global constructors:
@@ -41,13 +41,22 @@ you can of course build your own. (The `example/eventsource-polyfill.js` is buil
 
 ### Setting HTTP request headers
 
-You can define custom HTTP headers for the initial HTTP request. This can be useful for e.g. sending cookies
-or to specify an initial `Last-Event-ID` value.
+You can define custom HTTP headers for the initial HTTP request. This can be useful for e.g. sending cookies or to specify an initial `Last-Event-ID` value.
 
 HTTP headers are defined by assigning a `headers` attribute to the optional `eventSourceInitDict` argument:
 
 ```javascript
 var eventSourceInitDict = {headers: {'Cookie': 'test=test'}};
+var es = new EventSource(url, eventSourceInitDict);
+```
+
+Normally, EventSource will always add the headers `Cache-Control: no-cache` (since an SSE stream should always contain live content, not cached content), and `Accept: text/event-stream`. This could cause problems if you are making a cross-origin request, since CORS has restrictions on what headers can be sent. To turn off the default headers, so that it will _only_ send the headers you specify, set the `skipDefaultHeaders` option to `true`:
+
+```javascript
+var eventSourceInitDict = {
+  headers: {'Cookie': 'test=test'},
+  skipDefaultHeaders: true
+};
 var es = new EventSource(url, eventSourceInitDict);
 ```
 
@@ -60,17 +69,20 @@ var eventSourceInitDict = {method: 'POST', body: 'n=100'};
 var es = new EventSource(url, eventSourceInitDict);
 ```
 
-### Allow unauthorized HTTPS requests
+### Special HTTPS configuration
 
-By default, https requests that cannot be authorized will cause the connection to fail and an exception
-to be emitted. You can override this behaviour, along with other https options:
+In Node.js, you can customize the behavior of HTTPS requests by specifying, for instance, additional trusted CA certificates. You may use any of the special TLS options supported by Node's [`tls.connect()`](https://nodejs.org/api/tls.html#tls_tls_connect_options_callback) and [`tls.createSecureContext()`](https://nodejs.org/api/tls.html#tls_tls_createsecurecontext_options) (depending on what version of Node you are using) by putting them in an object in the `https` property of your configuration:
 
 ```javascript
-var eventSourceInitDict = {https: {rejectUnauthorized: false}};
+var eventSourceInitDict = {
+  https: {
+    rejectUnauthorized: false  // causes requests to succeed even if the certificate cannot be validated
+  }
+}
 var es = new EventSource(url, eventSourceInitDict);
 ```
 
-Note that for Node.js < v0.10.x this option has no effect - unauthorized HTTPS requests are *always* allowed.
+This only works in Node.js, not in a browser.
 
 ### HTTP status code on error events
 
@@ -93,7 +105,6 @@ You can define a `proxy` option for the HTTP request to be used. This is typical
 ```javascript
 var es = new EventSource(url, {proxy: 'http://your.proxy.com'});
 ```
-
 
 ## License
 

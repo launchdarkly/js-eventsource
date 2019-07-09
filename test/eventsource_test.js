@@ -482,14 +482,25 @@ describe('HTTP Request', function () {
     })
   })
 
+  function stripIrrelevantHeaders (headers) {
+    var h = Object.assign({}, headers)
+    delete h['connection']
+    delete h['host']
+    return h
+  }
+
   it('sets request headers', function (done) {
     createServer(function (err, server) {
       if (err) return done(err)
 
       server.on('request', function (req) {
-        assert.equal(req.headers['user-agent'], 'test')
-        assert.equal(req.headers['cookie'], 'test=test')
-        assert.equal(req.headers['last-event-id'], '99')
+        assert.deepStrictEqual(stripIrrelevantHeaders(req.headers), {
+          accept: 'text/event-stream',
+          'cache-control': 'no-cache',
+          'user-agent': 'test',
+          cookie: 'test=test',
+          'last-event-id': '99'
+        })
         server.close(done)
       })
 
@@ -499,6 +510,31 @@ describe('HTTP Request', function () {
         'Last-Event-ID': '99'
       }
       new EventSource(server.url, {headers: headers})
+    })
+  })
+
+  it('can omit default headers', function (done) {
+    createServer(function (err, server) {
+      if (err) return done(err)
+
+      server.on('request', function (req) {
+        assert.deepStrictEqual(stripIrrelevantHeaders(req.headers), {
+          'user-agent': 'test',
+          cookie: 'test=test',
+          'last-event-id': '99'
+        })
+        server.close(done)
+      })
+
+      var headers = {
+        'User-Agent': 'test',
+        'Cookie': 'test=test',
+        'Last-Event-ID': '99'
+      }
+      new EventSource(server.url, {
+        headers: headers,
+        skipDefaultHeaders: true
+      })
     })
   })
 
