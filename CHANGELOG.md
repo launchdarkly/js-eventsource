@@ -3,6 +3,12 @@
 All notable changes to this package will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org).
 
+## [1.1.0] - 2019-07- 09
+
+### Added:
+- The new option `skipDefaultHeaders`, if set to true, makes EventSource _not_ add the `Accept` and `Cache-Control` request headers that it would normally add. This may be necessary to avoid CORS problems in browsers if the stream URL is in another domain, since there are more restrictions on cross-origin requests that contain these headers.
+- There is a new property, `EventSource.supportedOptions`, that indicates which custom options are available. See "Detecting supported features" in [`README.md`](README.md#detecting-supported-features).
+
 ## [1.0.0] - 2019-01-29
 First release from this fork. Changes from the previous release of the upstream code (1.0.7) are as follows:
 

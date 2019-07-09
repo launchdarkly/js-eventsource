@@ -106,6 +106,22 @@ You can define a `proxy` option for the HTTP request to be used. This is typical
 var es = new EventSource(url, {proxy: 'http://your.proxy.com'});
 ```
 
+### Detecting supported features
+
+In cases where the EventSource implementation is determined at runtime (for instance, if you are in a browser that may or may not have native support for EventSource, and you are only loading this polyfill if there is no native support), you may want to  know ahead of time whether certain nonstandard features are available or not.
+
+The special property `EventSource.supportedOptions` is an object containing a `true` value for each property name that is allowed in the constructor parameters. If `EventSource.supportedOptions.somePropertyName` is true, then you are using a version of this polyfill that supports the `somePropertyName` option. If `EventSource.supportedOptions.somePropertyName` is false or undefined, or if `EventSource.supportedOptions` does not exist, then you are using either an older version of the polyfill, or some completely different EventSource implementation.
+
+For instance, if you want to use the `POST` method-- which built-in EventSource implementations in browsers cannot do-- but you do not know for sure whether the current EventSource is this polyfill or a built-in browser version, you should check first whether that option is supported; otherwise, if it's the browser version, it will simply ignore the method option and do a `GET` request instead which probably won't work. So your logic might look like this:
+
+```javascript
+if (EventSource.supportedOptions && EventSource.supportedOptions.method) {
+  var es = new EventSource(url, {method: 'POST'})
+} else {
+  // do whatever you want to do if you can't do a POST request
+}
+```
+
 ## License
 
 MIT-licensed. See LICENSE

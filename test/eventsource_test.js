@@ -1306,7 +1306,17 @@ describe('Proxying', function () {
 })
 
 describe('EventSource object', function () {
-  it('declares support for setting method', function () {
-    assert.equal(true, EventSource.supportsSettingMethod)
+  it('declares support for custom properties', function () {
+    assert.equal(true, EventSource.supportedOptions.headers)
+    assert.equal(true, EventSource.supportedOptions.https)
+    assert.equal(true, EventSource.supportedOptions.method)
+    assert.equal(true, EventSource.supportedOptions.proxy)
+    assert.equal(true, EventSource.supportedOptions.skipDefaultHeaders)
+    assert.equal(true, EventSource.supportedOptions.withCredentials)
+  })
+
+  it('does not allow supportedOptions to be modified', function () {
+    EventSource.supportedOptions.headers = false
+    assert.equal(true, EventSource.supportedOptions.headers)
   })
 })
