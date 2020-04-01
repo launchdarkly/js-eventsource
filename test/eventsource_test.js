@@ -81,9 +81,11 @@ function createProxy (target, protocol, callback) {
   var serve = protocol === 'https' ? https : http
 
   var proxied = []
+  var responses = []
   var server = serve.createServer(serve === https ? httpsServerOptions : undefined)
 
   server.on('request', function (req, res) {
+    responses.push(res)
     var options = u.parse(target)
     options.headers = req.headers
     options.rejectUnauthorized = false
@@ -103,7 +105,9 @@ function createProxy (target, protocol, callback) {
     proxied.forEach(function (res) {
       res.abort()
     })
-
+    responses.forEach(function (res) {
+      res.end()
+    })
     oldClose.call(server, function () {
       servers.splice(servers.indexOf(server), 1)
       closeCb()
@@ -1477,6 +1481,7 @@ describe('Proxying', function () {
         if (err) return done(err)
 
         var es = new EventSource(server.url, {proxy: proxy.url})
+        es.onerror = function () {}
         es.onmessage = function (m) {
           assert.equal(m.data, 'World')
           proxy.close(function () {
