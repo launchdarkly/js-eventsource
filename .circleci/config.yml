@@ -18,7 +18,7 @@ node-template: &node-template
           JEST_JUNIT_OUTPUT: "reports/junit/js-test-results.xml"
     - run: |
         if [[ $CIRCLE_JOB == current-release ]]; then
-          npm audit
+          ./scripts/better-audit.sh
         fi
     - store_test_results:
         path: reports/junit
