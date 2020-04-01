@@ -130,9 +130,9 @@ function writeEvents (chunks) {
   }
 }
 
-function assertRange(min, max, value) {
+function assertRange (min, max, value) {
   if (value < min || value > max) {
-    throw new Error('' + value + ' was not in range [' + min + ', ' + max + ']');
+    throw new Error('' + value + ' was not in range [' + min + ', ' + max + ']')
   }
 }
 
@@ -528,7 +528,7 @@ describe('HTTP Request', function () {
         server.close(done)
       })
 
-      es = new EventSource(server.url);
+      es = new EventSource(server.url)
       es.onerror = function () {}
     })
   })
@@ -971,7 +971,7 @@ describe('Reconnection', function () {
 
       var es = new EventSource(server.url, {
         initialRetryDelayMillis: briefDelay,
-        errorFilter: function(err) {
+        errorFilter: function (err) {
           return err.status === 204
         }
       })
@@ -1076,7 +1076,7 @@ describe('Reconnection', function () {
 })
 
 describe('retry delay', function () {
-  function verifyDelays(options, count, delaysAssertion, done) {
+  function verifyDelays (options, count, delaysAssertion, done) {
     createServer(function (err, server) {
       if (err) return done(err)
 
@@ -1099,32 +1099,32 @@ describe('retry delay', function () {
             delaysAssertion(delays)
             server.close(done)
           } catch (e) {
-            server.close(function() { done(e) })
+            server.close(function () { done(e) })
           }
         }
       }
     })
-  }  
+  }
 
   it('uses constant delay by default', function (done) {
     var delay = 5
     verifyDelays(
       { initialRetryDelayMillis: delay },
       3,
-      function(delays) {
+      function (delays) {
         assert.deepEqual(delays, [ delay, delay, delay ])
       },
       done
     )
   })
-  
+
   it('can use backoff with maximum', function (done) {
     var delay = 5
     var max = 31
     verifyDelays(
       { initialRetryDelayMillis: delay, maxBackoffMillis: max },
       4,
-      function(delays) {
+      function (delays) {
         assert.deepEqual(delays, [ delay, delay * 2, delay * 4, max ])
       },
       done
@@ -1137,7 +1137,7 @@ describe('retry delay', function () {
     verifyDelays(
       { initialRetryDelayMillis: delay, maxBackoffMillis: max, jitterRatio: 0.5 },
       3,
-      function(delays) {
+      function (delays) {
         assert.equal(delays.length, 3)
         assertRange(delay / 2, delay, delays[0])
         assertRange(delay, delay * 2, delays[1])
@@ -1187,7 +1187,7 @@ describe('readyState', function () {
       server.on('request', writeEvents([]))
       var es = new EventSource(server.url, { initialRetryDelayMillis: 10 })
 
-      es.onerror = function (err) {
+      es.onerror = function () {
         var state = es.readyState
         es.close()
         assert.equal(EventSource.CONNECTING, state)
