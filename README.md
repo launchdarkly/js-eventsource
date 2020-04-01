@@ -78,9 +78,9 @@ For backward compatibility, the default behavior is to use the same delay each t
 
 ```javascript
 var eventSourceInitDict = {
-  initialRetryDelay: 2000,         // sets initial retry delay to 2 seconds
+  initialRetryDelayMillis: 2000,   // sets initial retry delay to 2 seconds
   maxBackoffMillis: 30000,         // enables backoff, with a maximum of 30 seconds
-  retryResetIntervalMillis: 60000, // backoff will reset to initialRetryDelay if stream got an event at least 60 seconds before failing
+  retryResetIntervalMillis: 60000, // backoff will reset to initial level if stream got an event at least 60 seconds before failing
   jitterRatio: 0.5                 // each delay will be reduced by a randomized jitter of up to 50%
 };
 ```
