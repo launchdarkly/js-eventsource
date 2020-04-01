@@ -39,54 +39,20 @@ you can of course build your own. (The `example/eventsource-polyfill.js` is buil
 
 ## Extensions to the W3C API
 
-### Setting HTTP request headers
-
-You can define custom HTTP headers for the initial HTTP request. This can be useful for e.g. sending cookies or to specify an initial `Last-Event-ID` value.
-
-HTTP headers are defined by assigning a `headers` attribute to the optional `eventSourceInitDict` argument:
+All configurable extended behaviors use the optional `eventSourceInitDict` argument to the `EventSource` constructor. For instance:
 
 ```javascript
-var eventSourceInitDict = {headers: {'Cookie': 'test=test'}};
+var eventSourceInitDict = { initialRetryDelayMillis: 1000, maxRetryDelayMillis: 30000 };
 var es = new EventSource(url, eventSourceInitDict);
 ```
 
-Normally, EventSource will always add the headers `Cache-Control: no-cache` (since an SSE stream should always contain live content, not cached content), and `Accept: text/event-stream`. This could cause problems if you are making a cross-origin request, since CORS has restrictions on what headers can be sent. To turn off the default headers, so that it will _only_ send the headers you specify, set the `skipDefaultHeaders` option to `true`:
+In a browser that is using native `EventSource` the extra argument would simply be ignored, so any code that will run in a browser, if it might or might not be using this polyfill, should assume that these options might or might be used.
 
-```javascript
-var eventSourceInitDict = {
-  headers: {'Cookie': 'test=test'},
-  skipDefaultHeaders: true
-};
-var es = new EventSource(url, eventSourceInitDict);
-```
+### Extensions to event behavior
 
-### Setting HTTP request method/body
+Like the standard `EventSource`, this implementation emits the event `open` when a stream has been started and `error` when a stream has failed for any reason. All events have a single parameter which is an instance of the `Event` class.
 
-By default, EventSource makes a `GET` request. You can specify a different HTTP verb and/or a request body:
-
-```javascript
-var eventSourceInitDict = {method: 'POST', body: 'n=100'};
-var es = new EventSource(url, eventSourceInitDict);
-```
-
-### Special HTTPS configuration
-
-In Node.js, you can customize the behavior of HTTPS requests by specifying, for instance, additional trusted CA certificates. You may use any of the special TLS options supported by Node's [`tls.connect()`](https://nodejs.org/api/tls.html#tls_tls_connect_options_callback) and [`tls.createSecureContext()`](https://nodejs.org/api/tls.html#tls_tls_createsecurecontext_options) (depending on what version of Node you are using) by putting them in an object in the `https` property of your configuration:
-
-```javascript
-var eventSourceInitDict = {
-  https: {
-    rejectUnauthorized: false  // causes requests to succeed even if the certificate cannot be validated
-  }
-}
-var es = new EventSource(url, eventSourceInitDict);
-```
-
-This only works in Node.js, not in a browser.
-
-### HTTP status code on error events
-
-Unauthorized and redirect error status codes (for example 401, 403, 301, 307) are available in the `status` property in the error event.
+The `error` event has the following extended behavior: for an HTTP error response, the event object will have a `status` property (such as `401`) and optionally a `message` property (such as `"Unauthorized"`).
 
 ```javascript
 es.onerror = function (err) {
@@ -98,12 +64,90 @@ es.onerror = function (err) {
 };
 ```
 
+The following additional events may be emitted:
+
+* `closed`: The stream has been permanently closed, either due to a non-retryable error or because `close()` was called.
+* `end`: The server ended the stream. For backward compatibility, this is not reported as an `error`, but it is still treated as one in terms of the retry logic.
+* `retrying`: After an error, this indicates that `EventSource` will try to reconnect after some delay. The event object's `delayMillis` property indicates the delay in milliseconds.
+
+### Configuring backoff and jitter
+
+By default, `EventSource` automatically attempts to reconnect if a connection attempt fails or if an existing connection is broken. To prevent a flood of requests, there is always a delay before retrying the connection; the default value for this is 1000 milliseconds.
+
+For backward compatibility, the default behavior is to use the same delay each time. However, it is highly recommended that you enable both exponential backoff (the delay doubles on each successive retry, up to a configurable maximum) and jitter (a random amount is subtracted from each delay), so that if a server outage causes clients to all lose their connections at the same time they will not all retry at the same time. The backoff can also be configured to reset back to the initial delay if the stream has remained active for some amount of time.
+
+```javascript
+var eventSourceInitDict = {
+  initialRetryDelay: 2000,         // sets initial retry delay to 2 seconds
+  maxBackoffMillis: 30000,         // enables backoff, with a maximum of 30 seconds
+  retryResetIntervalMillis: 60000, // backoff will reset to initialRetryDelay if stream got an event at least 60 seconds before failing
+  jitterRatio: 0.5                 // each delay will be reduced by a randomized jitter of up to 50%
+};
+```
+
+### Configuring error retry behavior
+
+By default, to mimic the behavior of built-in browser `EventSource` implementations, `EventSource` will retry if a connection cannot be made or if the connection is broken (using whatever retry behavior you have configured, as described above)-- but if it connects and receives an HTTP error status, it will only retry for statuses 500, 502, 503, or 504; otherwise it will just raise an `error` event and disconnect, so the application is responsible for starting a new connection.
+
+If you set the option `errorFilter` to a function that receives an `Error` object and returns `true` or `false`, then `EventSource` will call it for any error-- either an HTTP error or an I/O error. If the function returns `true`, it will proceed with retrying the connection; if it returns `false`, it will end the connection and raise an `error` event. In this example, connections will always be retried unless there is a 401 error:
+
+```javascript:
+var eventSourceInitDict = {
+  errorFilter: function(e) {
+    return e.status !== 401;
+  }
+};
+```
+
+HTTP redirect responses (301/307) with a valid `Location` header are not considered errors, and are always immediately retried with the new URL.
+
+### Setting HTTP request headers
+
+You can define custom HTTP headers for the initial HTTP request. This can be useful for e.g. sending cookies or to specify an initial `Last-Event-ID` value.
+
+HTTP headers are defined by assigning a `headers` attribute to the optional `eventSourceInitDict` argument:
+
+```javascript
+var eventSourceInitDict = { headers: { Cookie: 'test=test' } };
+```
+
+Normally, EventSource will always add the headers `Cache-Control: no-cache` (since an SSE stream should always contain live content, not cached content), and `Accept: text/event-stream`. This could cause problems if you are making a cross-origin request, since CORS has restrictions on what headers can be sent. To turn off the default headers, so that it will _only_ send the headers you specify, set the `skipDefaultHeaders` option to `true`:
+
+```javascript
+var eventSourceInitDict = {
+  headers: { Cookie: 'test=test' },
+  skipDefaultHeaders: true
+};
+```
+
+### Setting HTTP request method/body
+
+By default, EventSource makes a `GET` request. You can specify a different HTTP verb and/or a request body:
+
+```javascript
+var eventSourceInitDict = { method: 'POST', body: 'n=100' };
+```
+
+### Special HTTPS configuration
+
+In Node.js, you can customize the behavior of HTTPS requests by specifying, for instance, additional trusted CA certificates. You may use any of the special TLS options supported by Node's [`tls.connect()`](https://nodejs.org/api/tls.html#tls_tls_connect_options_callback) and [`tls.createSecureContext()`](https://nodejs.org/api/tls.html#tls_tls_createsecurecontext_options) (depending on what version of Node you are using) by putting them in an object in the `https` property of your configuration:
+
+```javascript
+var eventSourceInitDict = {
+  https: {
+    rejectUnauthorized: false  // causes requests to succeed even if the certificate cannot be validated
+  }
+};
+```
+
+This only works in Node.js, not in a browser.
+
 ### HTTP/HTTPS proxy
 
 You can define a `proxy` option for the HTTP request to be used. This is typically useful if you are behind a corporate firewall.
 
 ```javascript
-var es = new EventSource(url, {proxy: 'http://your.proxy.com'});
+var eventSourceInitDict = { proxy: 'http://your.proxy.com' };
 ```
 
 ### Detecting supported features
@@ -116,7 +160,7 @@ For instance, if you want to use the `POST` method-- which built-in EventSource 
 
 ```javascript
 if (EventSource.supportedOptions && EventSource.supportedOptions.method) {
-  var es = new EventSource(url, {method: 'POST'})
+  var es = new EventSource(url, { method: 'POST' });
 } else {
   // do whatever you want to do if you can't do a POST request
 }
@@ -124,4 +168,4 @@ if (EventSource.supportedOptions && EventSource.supportedOptions.method) {
 
 ## License
 
-MIT-licensed. See LICENSE
+MIT-licensed. See LICENSE.
