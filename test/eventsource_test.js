@@ -8,6 +8,8 @@ var fs = require('fs')
 var mocha = require('mocha')
 var assert = require('assert')
 var u = require('url')
+var tunnel = require('tunnel')
+var helpers = require('launchdarkly-js-test-helpers')
 
 var it = mocha.it
 var describe = mocha.describe
@@ -1502,6 +1504,7 @@ describe('Proxying', function () {
         if (err) return done(err)
 
         var es = new EventSource(server.url, {proxy: proxy.url})
+        es.onerror = function () {}
         es.onmessage = function (m) {
           assert.equal(m.data, 'World')
           proxy.close(function () {
@@ -1522,9 +1525,38 @@ describe('Proxying', function () {
         if (err) return done(err)
 
         var es = new EventSource(server.url, {proxy: proxy.url, rejectUnauthorized: false})
+        es.onerror = function () {}
         es.onmessage = function (m) {
           assert.equal(m.data, 'World')
           proxy.close(function () {
+            server.close(done)
+          })
+        }
+      })
+    })
+  })
+
+  it('can use a tunneling agent with a proxy', function (done) {
+    createServer(function (err, server) {
+      if (err) return done(err)
+
+      server.on('request', writeEvents(['data: World\n\n']))
+
+      helpers.TestHttpServers.startProxy().then(function (proxyServer) {
+        const agent = tunnel.httpOverHttp({proxy: {host: proxyServer.hostname, port: proxyServer.port}})
+
+        var es = new EventSource(server.url, {agent: agent})
+        es.onerror = function (e) {
+          console.log('*** err: ' + e)
+          done(e)
+        }
+        es.onmessage = function (m) {
+          assert.equal(m.data, 'World')
+
+          assert.equal(proxyServer.requestCount(), 1)
+          proxyServer.nextRequest().then(function (req) {
+            assert.equal(req.path, server.url)
+            proxyServer.close()
             server.close(done)
           })
         }

@@ -150,6 +150,8 @@ You can define a `proxy` option for the HTTP request to be used. This is typical
 var eventSourceInitDict = { proxy: 'http://your.proxy.com' };
 ```
 
+In Node.js, you can also set the `agent` option to use a tunneling agent.
+
 ### Detecting supported features
 
 In cases where the EventSource implementation is determined at runtime (for instance, if you are in a browser that may or may not have native support for EventSource, and you are only loading this polyfill if there is no native support), you may want to  know ahead of time whether certain nonstandard features are available or not.
