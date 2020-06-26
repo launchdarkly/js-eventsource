@@ -515,7 +515,7 @@ describe('Parser', function () {
       }
     })
   })
-  
+
   it('parses a relatively huge message across many chunks efficiently', function (done) {
     this.timeout(1000)
 
