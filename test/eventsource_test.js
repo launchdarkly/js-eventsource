@@ -1627,7 +1627,8 @@ describe('read timeout', function () {
           assert.equal('request-1-event-1', events[0].data)
           assert.equal('request-2-event-1', events[1].data)
           assert.equal(1, errors.length)
-          assert.match(errors[0].message, /^Read timeout/)
+          assert.ok(/^Read timeout/.test(errors[0].message),
+            'Unexpected error message: ' + errors[0].message)
           server.close(done)
         }
       }
