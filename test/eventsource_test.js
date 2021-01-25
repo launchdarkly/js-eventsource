@@ -1585,6 +1585,89 @@ describe('Proxying', function () {
   })
 })
 
+describe('read timeout', function () {
+  var briefDelay = 1
+
+  function makeStreamHandler (timeBetweenEvents) {
+    var requestCount = 0
+    return function (req, res) {
+      requestCount++
+      res.writeHead(200, {'Content-Type': 'text/event-stream'})
+      var eventPrefix = 'request-' + requestCount
+      res.write('') // turns on chunking
+      res.write('data: ' + eventPrefix + '-event-1\n\n')
+      setTimeout(() => {
+        if (res.writableEnded || res.finished) {
+          // don't try to write any more if the connection's already been closed
+          return
+        }
+        res.write('data: ' + eventPrefix + '-event-2\n\n')
+      }, timeBetweenEvents)
+    }
+  }
+
+  it('drops connection if read timeout elapses', function (done) {
+    var readTimeout = 50
+    var timeBetweenEvents = 100
+    createServer(function (err, server) {
+      if (err) return done(err)
+
+      server.on('request', makeStreamHandler(timeBetweenEvents))
+
+      var es = new EventSource(server.url, {
+        initialRetryDelayMillis: briefDelay,
+        readTimeoutMillis: readTimeout
+      })
+      var events = []
+      var errors = []
+      es.onmessage = function (event) {
+        events.push(event)
+        if (events.length === 2) {
+          es.close()
+          assert.equal('request-1-event-1', events[0].data)
+          assert.equal('request-2-event-1', events[1].data)
+          assert.equal(1, errors.length)
+          assert.match(errors[0].message, /^Read timeout/)
+          server.close(done)
+        }
+      }
+      es.onerror = function (err) {
+        errors.push(err)
+      }
+    })
+  })
+
+  it('does not drop connection if read timeout does not elapse', function (done) {
+    var readTimeout = 100
+    var timeBetweenEvents = 50
+    createServer(function (err, server) {
+      if (err) return done(err)
+
+      server.on('request', makeStreamHandler(timeBetweenEvents))
+
+      var es = new EventSource(server.url, {
+        initialRetryDelayMillis: briefDelay,
+        readTimeoutMillis: readTimeout
+      })
+      var events = []
+      var errors = []
+      es.onmessage = function (event) {
+        events.push(event)
+        if (events.length === 2) {
+          es.close()
+          assert.equal('request-1-event-1', events[0].data)
+          assert.equal('request-1-event-2', events[1].data)
+          assert.equal(0, errors.length)
+          server.close(done)
+        }
+      }
+      es.onerror = function (err) {
+        errors.push(err)
+      }
+    })
+  })
+})
+
 describe('EventSource object', function () {
   it('declares support for custom properties', function () {
     assert.equal(true, EventSource.supportedOptions.headers)

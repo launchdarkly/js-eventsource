@@ -128,6 +128,14 @@ By default, EventSource makes a `GET` request. You can specify a different HTTP 
 var eventSourceInitDict = { method: 'POST', body: 'n=100' };
 ```
 
+### Read timeout
+
+TCP connections can sometimes fail without the client detecting an I/O error, in which case EventSource could hang forever waiting for events. Setting a `readTimeoutMillis` will cause EventSource to drop and retry the connection if that number of milliseconds ever elapses without receiving any new data from the server. If the server is known to send any "heartbeat" data at regular intervals (such as a `:` comment line, which is ignored in SSE) to indicate that the connection is still alive, set the read timeout to some number longer than that interval.
+
+```javascript
+var eventSourceInitDict = { readTimeoutMillis: 30000 };
+````
+
 ### Special HTTPS configuration
 
 In Node.js, you can customize the behavior of HTTPS requests by specifying, for instance, additional trusted CA certificates. You may use any of the special TLS options supported by Node's [`tls.connect()`](https://nodejs.org/api/tls.html#tls_tls_connect_options_callback) and [`tls.createSecureContext()`](https://nodejs.org/api/tls.html#tls_tls_createsecurecontext_options) (depending on what version of Node you are using) by putting them in an object in the `https` property of your configuration:
