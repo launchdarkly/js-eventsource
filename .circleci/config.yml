@@ -29,11 +29,9 @@ jobs:
   oldest-long-term-support-release:
     <<: *node-template
     docker:
-      - image: circleci/node:6
-      - image: redis
+      - image: cimg/node:current
 
   current-release:
     <<: *node-template
     docker:
       - image: circleci/node:latest
-      - image: redis
