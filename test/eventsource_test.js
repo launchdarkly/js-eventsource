@@ -1,135 +1,68 @@
 /* eslint-disable no-new */
 var EventSource = require('../lib/eventsource').EventSource
 var bufferFrom = require('buffer-from')
-var path = require('path')
-var http = require('http')
-var https = require('https')
-var fs = require('fs')
 var mocha = require('mocha')
 var assert = require('assert')
-var u = require('url')
 var tunnel = require('tunnel')
-var helpers = require('launchdarkly-js-test-helpers')
+const { AsyncQueue, TestHttpHandlers, TestHttpServers, sleepAsync, withCloseable } =
+  require('launchdarkly-js-test-helpers')
 
 var it = mocha.it
 var describe = mocha.describe
 
-var httpsServerOptions = {
-  key: fs.readFileSync(path.join(__dirname, 'server_certs', 'key.pem')),
-  cert: fs.readFileSync(path.join(__dirname, 'server_certs', 'certificate.pem'))
+const deliberatelyUnusedPort = 44444
+
+async function withServer (action) {
+  await withCloseable(TestHttpServers.start, action)
 }
 
-var _port = 20000
-var servers = []
-process.on('exit', function () {
-  if (servers.length > 0) {
-    console.error("************ Didn't kill all servers - there is still %d running.", servers.length)
+async function withEventSource (server, opts, action) {
+  const es = new EventSource(server.url, action === undefined ? undefined : opts)
+
+  // Set a default error handler to avoid uncaught rejections, since in most of our
+  // tests the EventSource is likely to get an error we don't care about when the
+  // test is being torn down
+  es.onerror = () => {}
+
+  await withCloseable(es, action || opts)
+}
+
+async function waitForOpenEvent (es) {
+  const opened = new AsyncQueue()
+  es.onopen = e => opened.add(e)
+  return opened.take()
+}
+
+function startErrorQueue (es) {
+  const errors = new AsyncQueue()
+  es.onerror = e => errors.add(e)
+  return errors
+}
+
+function startMessageQueue (es) {
+  const messages = new AsyncQueue()
+  es.onmessage = m => messages.add(m)
+  return messages
+}
+
+async function shouldReceiveMessages (es, messages) {
+  const queue = startMessageQueue(es)
+  for (const expected of messages) {
+    const actual = await queue.take()
+    assert.equal(expected.data, actual.data)
+    assert.equal(expected.type || 'message', actual.type)
   }
-})
-
-function createServer (callback) {
-  var server = http.createServer()
-  configureServer(server, 'http', _port++, callback)
 }
 
-function createHttpsServer (callback) {
-  var server = https.createServer(httpsServerOptions)
-  configureServer(server, 'https', _port++, callback)
-}
-
-function createHttpsServerWithClientAuth (callback) {
-  var options = {
-    key: fs.readFileSync(path.join(__dirname, 'client_certs', 'server_key.pem')),
-    cert: fs.readFileSync(path.join(__dirname, 'client_certs', 'server_cert.crt')),
-    ca: fs.readFileSync(path.join(__dirname, 'client_certs', 'cacert.crt')),
-    passphrase: 'test1234$',
-    requestCert: true,
-    rejectAuthorized: true
-  }
-  var server = https.createServer(options)
-  configureServer(server, 'https', _port++, callback)
-}
-
-function configureServer (server, protocol, port, callback) {
-  var responses = []
-
-  var oldClose = server.close
-  server.close = function (closeCb) {
-    responses.forEach(function (res) {
-      res.end()
-    })
-    oldClose.call(this, function () {
-      servers.splice(servers.indexOf(server), 1)
-      closeCb()
-    })
-  }
-
-  server.on('request', function (req, res) {
-    responses.push(res)
-  })
-
-  server.url = protocol + '://localhost:' + port
-
-  server.listen(port, function onOpen (err) {
-    servers.push(server)
-    callback(err, server)
-  })
-}
-
-function createProxy (target, protocol, callback) {
-  var proxyPort = _port++
-  var targetProtocol = target.indexOf('https') === 0 ? 'https' : 'http'
-  var requester = targetProtocol === 'https' ? https : http
-  var serve = protocol === 'https' ? https : http
-
-  var proxied = []
-  var responses = []
-  var server = serve.createServer(serve === https ? httpsServerOptions : undefined)
-
-  server.on('request', function (req, res) {
-    responses.push(res)
-    var options = u.parse(target)
-    options.headers = req.headers
-    options.rejectUnauthorized = false
-
-    var upstreamReq = requester.request(options, function (upstreamRes) {
-      upstreamRes.pipe(res)
-    })
-
-    proxied.push(upstreamReq)
-    upstreamReq.end()
-  })
-
-  servers.push(server)
-
-  var oldClose = server.close
-  server.close = function (closeCb) {
-    proxied.forEach(function (res) {
-      res.abort()
-    })
-    responses.forEach(function (res) {
-      res.end()
-    })
-    oldClose.call(server, function () {
-      servers.splice(servers.indexOf(server), 1)
-      closeCb()
-    })
-  }
-
-  server.listen(proxyPort, function onOpen (err) {
-    server.url = protocol + '://localhost:' + proxyPort
-    callback(err, server)
-  })
+async function expectNothingReceived (q) {
+  await sleepAsync(100)
+  assert.ok(q.isEmpty())
 }
 
 function writeEvents (chunks) {
-  return function (req, res) {
-    res.writeHead(200, {'Content-Type': 'text/event-stream'})
-    chunks.forEach(function (chunk) {
-      res.write(chunk)
-    })
-    res.write(':') // send a dummy comment to ensure that the head is flushed
-  }
+  const q = new AsyncQueue()
+  chunks.forEach(chunk => q.add(chunk))
+  return TestHttpHandlers.chunkedStream(200, {'Content-Type': 'text/event-stream'}, q)
 }
 
 function assertRange (min, max, value) {
@@ -138,158 +71,116 @@ function assertRange (min, max, value) {
   }
 }
 
-describe('Parser', function () {
-  it('parses multibyte characters', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+describe('Parser', () => {
+  it('parses multibyte characters', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['id: 1\ndata: €豆腐\n\n']))
 
-      server.on('request', writeEvents(['id: 1\ndata: €豆腐\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = function (m) {
-        assert.equal('€豆腐', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: '€豆腐' }
+        ])
+      })
     })
   })
 
-  it('parses empty lines with multibyte characters', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('parses empty lines with multibyte characters', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['\n\n\n\nid: 1\ndata: 我現在都看實況不玩遊戲\n\n']))
 
-      server.on('request', writeEvents(['\n\n\n\nid: 1\ndata: 我現在都看實況不玩遊戲\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = function (m) {
-        assert.equal('我現在都看實況不玩遊戲', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: '我現在都看實況不玩遊戲' }
+        ])
+      })
     })
   })
 
-  it('parses one one-line message in one chunk', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('parses one one-line message in one chunk', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: Hello\n\n']))
 
-      server.on('request', writeEvents(['data: Hello\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-      es.onmessage = function (m) {
-        assert.equal('Hello', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Hello' }
+        ])
+      })
     })
   })
 
-  it('ignores byte-order mark', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      server.on('request', function (req, res) {
+  it('ignores byte-order mark', async () => {
+    await withServer(async server => {
+      server.byDefault((req, res) => {
         res.writeHead(200, {'Content-Type': 'text/event-stream'})
         res.write('\uFEFF')
         res.write('data: foo\n\n')
         res.end()
       })
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-      es.onmessage = function (m) {
-        assert.equal('foo', m.data)
-        es.close()
-        server.close(done)
-      }
+
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'foo' }
+        ])
+      })
     })
   })
 
-  it('parses one one-line message in two chunks', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('parses one one-line message in two chunks', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: Hel', 'lo\n\n']))
 
-      server.on('request', writeEvents(['data: Hel', 'lo\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-      es.onmessage = function (m) {
-        assert.equal('Hello', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Hello' }
+        ])
+      })
     })
   })
 
-  it('parses two one-line messages in one chunk', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('parses two one-line messages in one chunk', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: Hello\n\n', 'data: World\n\n']))
 
-      server.on('request', writeEvents(['data: Hello\n\n', 'data: World\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = first
-
-      function first (m) {
-        assert.equal('Hello', m.data)
-        es.onmessage = second
-      }
-
-      function second (m) {
-        assert.equal('World', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Hello' },
+          { data: 'World' }
+        ])
+      })
     })
   })
 
-  it('parses one two-line message in one chunk', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('parses one two-line message in one chunk', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: Hello\ndata:World\n\n']))
 
-      server.on('request', writeEvents(['data: Hello\ndata:World\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = function (m) {
-        assert.equal('Hello\nWorld', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Hello\nWorld' }
+        ])
+      })
     })
   })
 
-  it('parses chopped up unicode data', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('parses chopped up unicode data', async () => {
+    await withServer(async server => {
+      const chopped = 'data: Aslak\n\ndata: Hellesøy\n\n'.split('')
+      server.byDefault(writeEvents(chopped))
 
-      var chopped = 'data: Aslak\n\ndata: Hellesøy\n\n'.split('')
-      server.on('request', writeEvents(chopped))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = first
-
-      function first (m) {
-        assert.equal('Aslak', m.data)
-        es.onmessage = second
-      }
-
-      function second (m) {
-        assert.equal('Hellesøy', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Aslak' },
+          { data: 'Hellesøy' }
+        ])
+      })
     })
   })
 
-  it('parses really chopped up unicode data', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      server.on('request', function (req, res) {
-        const msg = bufferFrom('data: Aslak Hellesøy is the original author\n\n')
+  it('parses really chopped up unicode data', async () => {
+    await withServer(async server => {
+      const content = 'Aslak Hellesøy is the original author'
+      server.byDefault((req, res) => {
+        const msg = bufferFrom('data: ' + content + '\n\n')
         res.writeHead(200, {'Content-Type': 'text/event-stream'})
 
         // Slice in the middle of a unicode sequence (ø), making sure that one data
@@ -299,259 +190,189 @@ describe('Parser', function () {
         })
       })
 
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = function (m) {
-        assert.equal('Aslak Hellesøy is the original author', m.data)
-        es.close()
-        server.close(done)
-      }
-    })
-  })
-
-  it('accepts CRLF as separator', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var chopped = 'data: Aslak\r\n\r\ndata: Hellesøy\r\n\r\n'.split('')
-      server.on('request', writeEvents(chopped))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = first
-
-      function first (m) {
-        assert.equal('Aslak', m.data)
-        es.onmessage = second
-      }
-
-      function second (m) {
-        assert.equal('Hellesøy', m.data)
-        es.close()
-        server.close(done)
-      }
-    })
-  })
-
-  it('accepts CR as separator', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var chopped = 'data: Aslak\r\rdata: Hellesøy\r\r'.split('')
-      server.on('request', writeEvents(chopped))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = first
-
-      function first (m) {
-        assert.equal('Aslak', m.data)
-        es.onmessage = second
-      }
-
-      function second (m) {
-        assert.equal('Hellesøy', m.data)
-        es.close()
-        server.close(done)
-      }
-    })
-  })
-
-  it('delivers message with explicit event', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      server.on('request', writeEvents(['event: greeting\ndata: Hello\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.addEventListener('greeting', function (m) {
-        assert.equal('Hello', m.data)
-        es.close()
-        server.close(done)
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: content }
+        ])
       })
     })
   })
 
-  it('allows removal of event listeners', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('accepts CRLF as separator', async () => {
+    await withServer(async server => {
+      const chopped = 'data: Aslak\r\n\r\ndata: Hellesøy\r\n\r\n'.split('')
+      server.byDefault(writeEvents(chopped))
 
-      server.on('request', writeEvents(['event: greeting\ndata: Hello\n\n', 'event: greeting\ndata: World\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-      var numCalled = 0
-
-      function onGreeting (m) {
-        numCalled++
-        assert.equal('Hello', m.data)
-        es.removeEventListener('greeting', onGreeting, false)
-        process.nextTick(scheduleDisconnect)
-      }
-
-      function scheduleDisconnect () {
-        assert.equal(1, numCalled)
-        es.close()
-        server.close(done)
-      }
-
-      es.addEventListener('greeting', onGreeting, false)
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Aslak' },
+          { data: 'Hellesøy' }
+        ])
+      })
     })
   })
 
-  it('ignores comments', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('accepts CR as separator', async () => {
+    await withServer(async server => {
+      const chopped = 'data: Aslak\r\rdata: Hellesøy\r\r'.split('')
+      server.byDefault(writeEvents(chopped))
 
-      server.on('request', writeEvents(['data: Hello\n\n:nothing to see here\n\ndata: World\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = first
-
-      function first (m) {
-        assert.equal('Hello', m.data)
-        es.onmessage = second
-      }
-
-      function second (m) {
-        assert.equal('World', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Aslak' },
+          { data: 'Hellesøy' }
+        ])
+      })
     })
   })
 
-  it('ignores empty comments', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('delivers message with explicit event', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['event: greeting\ndata: Hello\n\n']))
 
-      server.on('request', writeEvents(['data: Hello\n\n:\n\ndata: World\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
+      await withEventSource(server, async es => {
+        const messages = new AsyncQueue()
+        es.addEventListener('greeting', m => messages.add(m))
 
-      es.onmessage = first
-
-      function first (m) {
-        assert.equal('Hello', m.data)
-        es.onmessage = second
-      }
-
-      function second (m) {
-        assert.equal('World', m.data)
-        es.close()
-        server.close(done)
-      }
+        const m = await messages.take()
+        assert.equal(m.data, 'Hello')
+      })
     })
   })
 
-  it('does not ignore multilines strings', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('allows removal of event listeners', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['event: greeting\ndata: Hello\n\n', 'event: greeting\ndata: World\n\n']))
 
-      server.on('request', writeEvents(['data: line one\ndata:\ndata: line two\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
+      await withEventSource(server, async es => {
+        const messages1 = new AsyncQueue()
+        const messages2 = new AsyncQueue()
 
-      es.onmessage = function (m) {
-        assert.equal('line one\n\nline two', m.data)
-        es.close()
-        server.close(done)
-      }
+        function add1 (m) { messages1.add(m) }
+        function add2 (m) { messages2.add(m) }
+        es.addEventListener('greeting', add1)
+        es.addEventListener('greeting', add2)
+        es.removeEventListener('greeting', add1, false)
+
+        await messages2.take()
+        await expectNothingReceived(messages1)
+      })
     })
   })
 
-  it('does not ignore multilines strings even in data beginning', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('ignores comments', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: Hello\n\n:nothing to see here\n\ndata: World\n\n']))
 
-      server.on('request', writeEvents(['data:\ndata:line one\ndata: line two\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = function (m) {
-        assert.equal('\nline one\nline two', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Hello' },
+          { data: 'World' }
+        ])
+      })
     })
   })
 
-  it('causes entire event to be ignored for empty event field', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('ignores empty comments', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: Hello\n\n:\n\ndata: World\n\n']))
 
-      server.on('request', writeEvents(['event:\n\ndata: Hello\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      var originalEmit = es.emit
-      es.emit = function (event) {
-        assert.ok(event === 'open' || event === 'message' || event === 'closed')
-        return originalEmit.apply(this, arguments)
-      }
-      es.onmessage = function (m) {
-        assert.equal('Hello', m.data)
-        es.close()
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Hello' },
+          { data: 'World' }
+        ])
+      })
     })
   })
 
-  it('parses relatively huge messages efficiently', function (done) {
+  it('does not ignore multilines strings', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: line one\ndata:\ndata: line two\n\n']))
+
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'line one\n\nline two' }
+        ])
+      })
+    })
+  })
+
+  it('does not ignore multilines strings even in data beginning', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data:\ndata:line one\ndata: line two\n\n']))
+
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: '\nline one\nline two' }
+        ])
+      })
+    })
+  })
+
+  it('causes entire event to be ignored for empty event field', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['event:\n\ndata: Hello\n\n']))
+
+      await withEventSource(server, async es => {
+        const originalEmit = es.emit
+        const events = new AsyncQueue()
+        es.emit = function (e) {
+          events.add(e)
+          return originalEmit.apply(this, arguments)
+        }
+        await shouldReceiveMessages(es, [
+          { data: 'Hello' }
+        ])
+        while (!events.isEmpty()) {
+          const e = await events.take()
+          assert.ok(e === 'open' || e === 'message' || e === 'closed')
+        }
+      })
+    })
+  })
+
+  it('parses relatively huge messages efficiently', async function () {
     this.timeout(1000)
 
-    createServer(function (err, server) {
-      if (err) return done(err)
-      var longMessage = 'data: ' + new Array(100000).join('a') + '\n\n'
-      server.on('request', writeEvents([longMessage]))
+    await withServer(async server => {
+      const longMessageContent = new Array(100000).join('a')
+      const longMessage = 'data: ' + longMessageContent + '\n\n'
+      server.byDefault(writeEvents([longMessage]))
 
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = function () {
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: longMessageContent }
+        ])
+      })
     })
   })
 
-  it('parses a relatively huge message across many chunks efficiently', function (done) {
+  it('parses a relatively huge message across many chunks efficiently', async function () {
     this.timeout(1000)
 
-    createServer(function (err, server) {
-      if (err) return done(err)
+    await withServer(async server => {
+      const longMessageContent = new Array(100000).join('a')
+      const longMessage = 'data: ' + longMessageContent + '\n\n'
+      const longMessageChunks = longMessage.match(/[\s\S]{1,10}/g) // Split the message into chunks of 10 characters
+      server.byDefault(writeEvents(longMessageChunks))
 
-      var longMessageContent = new Array(100000).join('a')
-      var longMessage = 'data: ' + longMessageContent + '\n\n'
-      var longMessageChunks = longMessage.match(/[\s\S]{1,10}/g) // Split the message into chunks of 10 characters
-      server.on('request', writeEvents(longMessageChunks))
-
-      var es = new EventSource(server.url)
-
-      es.onmessage = function (m) {
-        assert.equal(longMessageContent, m.data)
-        server.close(done)
-      }
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: longMessageContent }
+        ])
+      })
     })
   })
 })
 
-describe('HTTP Request', function () {
-  it('passes cache-control: no-cache to server', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es
-
-      server.on('request', function (req) {
+describe('HTTP Request', () => {
+  it('passes cache-control: no-cache to server', async () => {
+    await withServer(async server => {
+      await withEventSource(server, async es => {
+        const req = await server.nextRequest()
         assert.equal('no-cache', req.headers['cache-control'])
-        es.close()
-        server.close(done)
       })
-
-      es = new EventSource(server.url)
-      es.onerror = function () {}
     })
   })
 
@@ -562,13 +383,15 @@ describe('HTTP Request', function () {
     return h
   }
 
-  it('sets request headers', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es
-
-      server.on('request', function (req) {
+  it('sets request headers', async () => {
+    await withServer(async server => {
+      const headers = {
+        'User-Agent': 'test',
+        'Cookie': 'test=test',
+        'Last-Event-ID': '99'
+      }
+      await withEventSource(server, { headers }, async es => {
+        const req = await server.nextRequest()
         assert.deepStrictEqual(stripIrrelevantHeaders(req.headers), {
           accept: 'text/event-stream',
           'cache-control': 'no-cache',
@@ -576,587 +399,340 @@ describe('HTTP Request', function () {
           cookie: 'test=test',
           'last-event-id': '99'
         })
-        es.close()
-        server.close(done)
       })
+    })
+  })
 
-      var headers = {
+  it('can omit default headers', async () => {
+    await withServer(async server => {
+      const headers = {
         'User-Agent': 'test',
         'Cookie': 'test=test',
         'Last-Event-ID': '99'
       }
-      es = new EventSource(server.url, {headers: headers})
-      es.onerror = function () {}
-    })
-  })
-
-  it('can omit default headers', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es
-
-      server.on('request', function (req) {
+      const opts = { headers, skipDefaultHeaders: true }
+      await withEventSource(server, opts, async es => {
+        const req = await server.nextRequest()
         assert.deepStrictEqual(stripIrrelevantHeaders(req.headers), {
           'user-agent': 'test',
           cookie: 'test=test',
           'last-event-id': '99'
         })
-        es.close()
-        server.close(done)
       })
-
-      var headers = {
-        'User-Agent': 'test',
-        'Cookie': 'test=test',
-        'Last-Event-ID': '99'
-      }
-      es = new EventSource(server.url, {
-        headers: headers,
-        skipDefaultHeaders: true
-      })
-      es.onerror = function () {}
     })
   })
 
-  it("does not set request headers that don't have a value", function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es
-
-      server.on('request', function (req) {
-        es.close()
-        assert.equal(req.headers['user-agent'], 'test')
-        assert.equal(req.headers['cookie'], 'test=test')
-        assert.equal(req.headers['last-event-id'], '99')
-        assert.equal(req.headers['X-Something'], undefined)
-        server.close(done)
-      })
-
-      var headers = {
+  it("does not set request headers that don't have a value", async () => {
+    await withServer(async server => {
+      const headers = {
         'User-Agent': 'test',
         'Cookie': 'test=test',
         'Last-Event-ID': '99',
         'X-Something': null
       }
-
-      assert.doesNotThrow(
-        function () {
-          es = new EventSource(server.url, {headers: headers})
-          es.onerror = function () {}
-        }
-      )
+      await withEventSource(server, { headers }, async es => {
+        const req = await server.nextRequest()
+        assert.equal(req.headers['user-agent'], 'test')
+        assert.equal(req.headers['cookie'], 'test=test')
+        assert.equal(req.headers['last-event-id'], '99')
+        assert.equal(req.headers['X-Something'], undefined)
+      })
     })
   })
 
-  it('uses GET method by default', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es
-
-      server.on('request', function (req) {
-        assert.equal(req.method, 'GET')
-        server.close(done)
+  it('uses GET method by default', async () => {
+    await withServer(async server => {
+      await withEventSource(server, async es => {
+        const req = await server.nextRequest()
+        assert.equal(req.method, 'get')
       })
-
-      es = new EventSource(server.url)
-      es.onerror = function () {}
     })
   })
 
-  it('can specify HTTP method and body', function (done) {
-    var content = '{ "test": true }'
+  it('can specify HTTP method and body', async () => {
+    const content = '{ "test": true }'
 
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es
-
-      server.on('request', function (req) {
-        assert.equal(req.method, 'POST')
-
-        var receivedContent = ''
-        req.on('data', function (chunk) {
-          receivedContent += chunk
-        })
-        req.on('end', function () {
-          es.close()
-          assert.equal(content, receivedContent)
-          server.close(done)
-        })
+    await withServer(async server => {
+      const opts = { method: 'POST', body: content }
+      await withEventSource(server, opts, async es => {
+        const req = await server.nextRequest()
+        assert.equal(req.method, 'post')
+        assert.equal(req.body, content)
       })
+    })
+  })
 
-      es = new EventSource(server.url, { method: 'POST', body: content })
-      es.onerror = function () {}
+  it('sends correct Last-Event-ID http header when an initial Last-Event-ID header was specified in the constructor', async () => {
+    await withServer(async server => {
+      const opts = { headers: { 'Last-Event-ID': '9' } }
+      await withEventSource(server, opts, async es => {
+        const req = await server.nextRequest()
+        assert.equal(req.headers['last-event-id'], 9)
+      })
     })
   });
 
-  [301, 307].forEach(function (status) {
-    it('follows http ' + status + ' redirect', function (done) {
-      var redirectSuffix = '/foobar'
-      var clientRequestedRedirectUrl = false
-      createServer(function (err, server) {
-        if (err) return done(err)
+  [301, 307].forEach((status) => {
+    it('follows http ' + status + ' redirect', async () => {
+      const redirectSuffix = '/foobar'
 
-        server.on('request', function (req, res) {
-          if (req.url === '/') {
-            res.writeHead(status, {
-              'Connection': 'Close',
-              'Location': server.url + redirectSuffix
-            })
-            res.end()
-          } else if (req.url === redirectSuffix) {
-            clientRequestedRedirectUrl = true
-            res.writeHead(200, {'Content-Type': 'text/event-stream'})
-            res.end()
-          }
+      await withServer(async server => {
+        server.forMethodAndPath('get', '/', TestHttpHandlers.respond(status,
+          {'Connection': 'Close', 'Location': server.url + redirectSuffix}))
+        server.forMethodAndPath('get', redirectSuffix, writeEvents(['data: hello\n\n']))
+
+        await withEventSource(server, async es => {
+          const request1 = await server.nextRequest()
+          assert.equal(request1.path, '/')
+
+          const request2 = await server.nextRequest()
+          assert.equal(request2.path, redirectSuffix)
         })
-
-        var es = new EventSource(server.url)
-        es.onerror = function () {}
-        es.onopen = function () {
-          es.close()
-          assert.ok(clientRequestedRedirectUrl)
-          assert.equal(server.url + redirectSuffix, es.url)
-          server.close(done)
-        }
       })
     })
 
-    it('causes error event when response is ' + status + ' with missing location', function (done) {
-      createServer(function (err, server) {
-        if (err) return done(err)
+    it('causes error event when response is ' + status + ' with missing location', async () => {
+      await withServer(async server => {
+        server.byDefault(TestHttpHandlers.respond(status, {'Connection': 'Close'}))
 
-        server.on('request', function (req, res) {
-          res.writeHead(status, 'status message', {
-            'Connection': 'Close'
-          })
-          res.end()
-        })
-
-        var es = new EventSource(server.url)
-        es.onerror = function (err) {
-          es.close()
+        await withEventSource(server, async es => {
+          const errors = startErrorQueue(es)
+          const err = await errors.take()
           assert.equal(err.status, status)
-          assert.equal(err.message, 'status message')
-          server.close(done)
-        }
+        })
       })
     })
   });
 
   [401, 403].forEach(function (status) {
-    it('causes error event when response status is ' + status, function (done) {
-      createServer(function (err, server) {
-        if (err) return done(err)
+    it('causes error event when response status is ' + status, async () => {
+      await withServer(async server => {
+        server.byDefault(TestHttpHandlers.respond(status))
 
-        server.on('request', function (req, res) {
-          res.writeHead(status, 'status message', {'Content-Type': 'text/html'})
-          res.end()
-        })
-
-        var es = new EventSource(server.url)
-        es.onerror = function (err) {
-          es.close()
+        await withEventSource(server, async es => {
+          const errors = startErrorQueue(es)
+          const err = await errors.take()
           assert.equal(err.status, status)
-          assert.equal(err.message, 'status message')
-          server.close(done)
-        }
+        })
       })
     })
   })
 })
 
-describe('HTTPS Support', function () {
-  it('uses https for https urls', function (done) {
-    createHttpsServer(function (err, server) {
-      if (err) return done(err)
+describe('HTTPS Support', () => {
+  it('uses https for https urls', async () => {
+    await withCloseable(TestHttpServers.startSecure, async server => {
+      server.byDefault(writeEvents(['data: hello\n\n']))
 
-      server.on('request', writeEvents(['data: hello\n\n']))
-      var es = new EventSource(server.url, {rejectUnauthorized: false})
-      es.onerror = function () {}
-
-      es.onmessage = function (m) {
-        assert.equal('hello', m.data)
-        es.close()
-        server.close(done)
-      }
+      const opts = { rejectUnauthorized: false }
+      await withEventSource(server, opts, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'hello' }
+        ])
+      })
     })
   })
 })
 
-describe('HTTPS Client Certificate Support', function () {
-  it('uses client certificate for https urls', function (done) {
-    this.timeout(1500000)
-    createHttpsServerWithClientAuth(function (err, server) {
-      if (err) return done(err)
+describe('Reconnection', () => {
+  const briefDelay = 1
+  const delayOpts = { initialRetryDelayMillis: briefDelay }
 
-      server.on('request', writeEvents(['data: hello\n\n']))
-      var es = new EventSource(server.url,
-        {
-          https: {
-            key: fs.readFileSync(path.join(__dirname, 'client_certs', 'client_key.pem')),
-            cert: fs.readFileSync(path.join(__dirname, 'client_certs', 'client_cert.crt')),
-            ca: fs.readFileSync(path.join(__dirname, 'client_certs', 'cacert.crt')),
-            passphrase: 'test1234$',
-            rejectUnauthorized: true
-          }
-        }
-      )
-      es.onerror = function () {}
-      es.onmessage = function (m) {
-        es.close()
-        assert.equal('hello', m.data)
-        server.close(done)
-      }
+  async function shouldReconnectAndGetMessage (port, es) {
+    return withCloseable(() => TestHttpServers.start({}, port), async server => {
+      server.byDefault(writeEvents(['data: got it\n\n']))
+
+      await shouldReceiveMessages(es, [
+        { data: 'got it' }
+      ])
+
+      return server.nextRequest()
+    })
+  }
+
+  async function shouldNotReconnect (port, es) {
+    await withCloseable(() => TestHttpServers.start({}, port), async server => {
+      server.byDefault(writeEvents(['data: got it\n\n']))
+
+      const messages = startMessageQueue(es)
+      await expectNothingReceived(messages)
+    })
+  }
+
+  it('is attempted when server is down', async () => {
+    await withCloseable(new EventSource('http://localhost:' + deliberatelyUnusedPort, delayOpts), async es => {
+      const errors = startErrorQueue(es)
+      await errors.take()
+
+      await shouldReconnectAndGetMessage(deliberatelyUnusedPort, es)
     })
   })
-})
 
-describe('Reconnection', function () {
-  var briefDelay = 1
+  it('is attempted when server goes down after connection', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: hello\n\n']))
 
-  it('is attempted when server is down', function (done) {
-    var es = new EventSource('http://localhost:' + _port, { initialRetryDelayMillis: briefDelay })
-    es.onerror = function () {
-      es.onerror = function () {}
-      createServer(function (err, server) {
-        if (err) return done(err)
+      await withEventSource(server, delayOpts, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'hello' }
+        ])
 
-        server.on('request', writeEvents(['data: hello\n\n']))
+        await server.closeAndWait()
 
-        es.onmessage = function (m) {
-          es.close()
-          assert.equal('hello', m.data)
-          server.close(done)
-        }
+        await shouldReconnectAndGetMessage(server.port, es)
       })
-    }
-  })
-
-  it('is attempted when server goes down after connection', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      server.on('request', writeEvents(['data: hello\n\n']))
-      var es = new EventSource(server.url, { initialRetryDelayMillis: briefDelay })
-      es.onerror = function (e) {}
-
-      es.onmessage = function (m) {
-        assert.equal('hello', m.data)
-        server.close(function (err) {
-          if (err) return done(err)
-
-          var port = u.parse(es.url).port
-          configureServer(http.createServer(), 'http', port, function (err, server2) {
-            if (err) return done(err)
-
-            server2.on('request', writeEvents(['data: world\n\n']))
-            es.onmessage = function (m) {
-              es.close()
-              assert.equal('world', m.data)
-              server2.close(done)
-            }
-          })
-        })
-      }
     })
   })
 
-  it('is attempted when the server responds with a 500', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('is attempted when the server responds with a 500', async () => {
+    await withServer(async server => {
+      server.byDefault(TestHttpHandlers.respond(500))
 
-      server.on('request', function (req, res) {
-        res.writeHead(500)
-        res.end()
+      await withEventSource(server, delayOpts, async es => {
+        const errors = startErrorQueue(es)
+        await errors.take()
+
+        await server.closeAndWait()
+
+        await shouldReconnectAndGetMessage(server.port, es)
       })
-
-      var es = new EventSource(server.url, { initialRetryDelayMillis: briefDelay })
-
-      var errored = false
-
-      es.onerror = function () {
-        if (errored) return
-        errored = true
-        server.close(function (err) {
-          if (err) return done(err)
-
-          var port = u.parse(es.url).port
-          configureServer(http.createServer(), 'http', port, function (err, server2) {
-            if (err) return done(err)
-
-            server2.on('request', writeEvents(['data: hello\n\n']))
-            es.onmessage = function (m) {
-              es.close()
-              assert.equal('hello', m.data)
-              server2.close(done)
-            }
-          })
-        })
-      }
     })
   })
 
-  it('is stopped when server goes down and eventsource is being closed', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('is stopped when server goes down and eventsource is being closed', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: hello\n\n']))
 
-      server.on('request', writeEvents(['data: hello\n\n']))
-      var es = new EventSource(server.url, { initialRetryDelayMillis: briefDelay })
+      await withEventSource(server, delayOpts, async es => {
+        const errors = startErrorQueue(es)
 
-      es.onmessage = function (m) {
-        assert.equal('hello', m.data)
-        server.close(function (err) {
-          if (err) return done(err)
-          // The server has closed down. es.onerror should now get called,
-          // because es's remote connection was dropped.
-        })
-      }
+        await shouldReceiveMessages(es, [
+          { data: 'hello' }
+        ])
 
-      es.onerror = function () {
+        await server.closeAndWait()
+        await errors.take()
+
         // We received an error because the remote connection was closed.
         // We close es, so we do not want es to reconnect.
         es.close()
 
-        var port = u.parse(es.url).port
-        configureServer(http.createServer(), 'http', port, function (err, server2) {
-          if (err) return done(err)
-          server2.on('request', writeEvents(['data: world\n\n']))
-
-          es.onmessage = function (m) {
-            es.close()
-            return done(new Error('Unexpected message: ' + m.data))
-          }
-
-          setTimeout(function () {
-            // We have not received any message within 100ms, we can
-            // presume this works correctly.
-            es.close()
-            server2.close(done)
-          }, 100)
-        })
-      }
-    })
-  })
-
-  it('is not attempted when server responds with non-200 and non-500', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      server.on('request', function (req, res) {
-        res.writeHead(204, 'status message')
-        res.end()
+        await shouldNotReconnect(server.port, es)
       })
-
-      var es = new EventSource(server.url, { initialRetryDelayMillis: briefDelay })
-
-      es.onerror = function (e) {
-        assert.equal(e.status, 204)
-        assert.equal(e.message, 'status message')
-        server.close(function (err) {
-          if (err) return done(err)
-
-          var port = u.parse(es.url).port
-          configureServer(http.createServer(), 'http', port, function (err, server2) {
-            if (err) return done(err)
-
-            // this will be verified by the readyState
-            // going from CONNECTING to CLOSED,
-            // along with the tests verifying that the
-            // state is CONNECTING when a server closes.
-            // it's next to impossible to write a fail-safe
-            // test for this, though.
-            var ival = setInterval(function () {
-              if (es.readyState === EventSource.CLOSED) {
-                clearInterval(ival)
-                es.close()
-                server2.close(done)
-              }
-            }, 5)
-          })
-        })
-      }
     })
   })
 
-  it('is attempted for non-200 and non-500 error if errorFilter says so', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('is not attempted when server responds with non-200 and non-500', async () => {
+    await withServer(async server => {
+      server.byDefault(TestHttpHandlers.respond(204))
 
-      server.on('request', function (req, res) {
-        res.writeHead(204)
-        res.end()
+      await withEventSource(server, delayOpts, async es => {
+        const errors = startErrorQueue(es)
+
+        await errors.take()
+        await server.closeAndWait()
+
+        await shouldNotReconnect(server.port, es)
       })
+    })
+  })
 
-      var es = new EventSource(server.url, {
-        initialRetryDelayMillis: briefDelay,
-        errorFilter: function (err) {
-          return err.status === 204
-        }
+  it('is attempted for non-200 and non-500 error if errorFilter says so', async () => {
+    await withServer(async server => {
+      server.byDefault(TestHttpHandlers.respond(204))
+
+      const opts = { ...delayOpts, errorFilter: err => err.status === 204 }
+
+      await withEventSource(server, opts, async es => {
+        const errors = startErrorQueue(es)
+
+        await errors.take()
+        await server.closeAndWait()
+
+        await shouldReconnectAndGetMessage(server.port, es)
       })
-
-      var errored = false
-
-      es.onerror = function () {
-        if (errored) return
-        errored = true
-        server.close(function (err) {
-          if (err) return done(err)
-
-          var port = u.parse(es.url).port
-          configureServer(http.createServer(), 'http', port, function (err, server2) {
-            if (err) return done(err)
-
-            server2.on('request', writeEvents(['data: hello\n\n']))
-            es.onmessage = function (m) {
-              assert.equal('hello', m.data)
-              es.close()
-              server2.close(done)
-            }
-          })
-        })
-      }
     })
   })
 
-  it('sends Last-Event-ID http header when it has previously been passed in an event from the server', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('sends Last-Event-ID http header when it has previously been passed in an event from the server', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['id: 10\ndata: Hello\n\n']))
 
-      server.on('request', writeEvents(['id: 10\ndata: Hello\n\n']))
+      await withEventSource(server, delayOpts, async es => {
+        const messages = startMessageQueue(es)
+        await messages.take()
 
-      var es = new EventSource(server.url, { initialRetryDelayMillis: briefDelay })
-      es.onerror = function () {}
-      es.reconnectInterval = 0
+        await server.closeAndWait()
 
-      es.onmessage = function () {
-        server.close(function (err) {
-          if (err) return done(err)
-
-          var port = u.parse(es.url).port
-          configureServer(http.createServer(), 'http', port, function (err, server2) {
-            if (err) return done(err)
-
-            server2.on('request', function (req, res) {
-              es.close()
-              assert.equal('10', req.headers['last-event-id'])
-              server2.close(done)
-            })
-          })
-        })
-      }
-    })
-  })
-
-  it('sends correct Last-Event-ID http header when an initial Last-Event-ID header was specified in the constructor', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es
-
-      server.on('request', function (req, res) {
-        es.close()
-        assert.equal('9', req.headers['last-event-id'])
-        server.close(done)
+        const req = await shouldReconnectAndGetMessage(server.port, es)
+        assert.equal(req.headers['last-event-id'], '10')
       })
-
-      es = new EventSource(server.url, {headers: {'Last-Event-ID': '9'}})
-      es.onerror = function () {}
     })
   })
 
-  it('does not send Last-Event-ID http header when it has not been previously sent by the server', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('does not send Last-Event-ID http header when it has not been previously sent by the server', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: hello\n\n']))
 
-      server.on('request', writeEvents(['data: Hello\n\n']))
+      await withEventSource(server, delayOpts, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'hello' }
+        ])
 
-      var es = new EventSource(server.url, { initialRetryDelayMillis: briefDelay })
-      es.onerror = function () {}
+        await server.closeAndWait()
 
-      es.onmessage = function () {
-        server.close(function (err) {
-          if (err) return done(err)
-
-          var port = u.parse(es.url).port
-          configureServer(http.createServer(), 'http', port, function (err, server2) {
-            if (err) return done(err)
-
-            server2.on('request', function (req, res) {
-              es.close()
-              assert.equal(undefined, req.headers['last-event-id'])
-              server2.close(done)
-            })
-          })
-        })
-      }
+        const req = await shouldReconnectAndGetMessage(server.port, es)
+        assert.equal(req.headers['last-event-id'], undefined)
+      })
     })
   })
 })
 
-describe('retry delay', function () {
-  function verifyDelays (options, count, delaysAssertion, done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+describe('retry delay', () => {
+  async function verifyDelays (options, count, delaysAssertion) {
+    await withServer(async server => {
+      server.byDefault(TestHttpHandlers.respond(500))
 
-      server.on('request', function (req, res) {
-        res.writeHead(500)
-        res.end()
-      })
+      await withEventSource(server, options, async es => {
+        const delays = new AsyncQueue()
+        es.onretrying = event => delays.add(event.delayMillis)
 
-      var counter = 0
-      var delays = []
-      var es = new EventSource(server.url, options)
-      es.onerror = function () {}
-
-      es.onretrying = function (event) {
-        delays.push(event.delayMillis)
-        counter++
-        if (counter >= count) {
-          es.close()
-          try {
-            delaysAssertion(delays)
-            server.close(done)
-          } catch (e) {
-            server.close(function () { done(e) })
-          }
+        let allDelays = []
+        while (allDelays.length < count) {
+          allDelays.push(await delays.take())
         }
-      }
+        delaysAssertion(allDelays)
+      })
     })
   }
 
-  it('uses constant delay by default', function (done) {
-    var delay = 5
-    verifyDelays(
+  it('uses constant delay by default', async () => {
+    const delay = 5
+    await verifyDelays(
       { initialRetryDelayMillis: delay },
       3,
       function (delays) {
         assert.deepEqual(delays, [ delay, delay, delay ])
-      },
-      done
+      }
     )
   })
 
-  it('can use backoff with maximum', function (done) {
-    var delay = 5
-    var max = 31
-    verifyDelays(
+  it('can use backoff with maximum', async () => {
+    const delay = 5
+    const max = 31
+    await verifyDelays(
       { initialRetryDelayMillis: delay, maxBackoffMillis: max },
       4,
       function (delays) {
         assert.deepEqual(delays, [ delay, delay * 2, delay * 4, max ])
-      },
-      done
+      }
     )
   })
 
-  it('can use backoff with jitter', function (done) {
-    var delay = 5
-    var max = 31
-    verifyDelays(
+  it('can use backoff with jitter', async () => {
+    const delay = 5
+    const max = 31
+    await verifyDelays(
       { initialRetryDelayMillis: delay, maxBackoffMillis: max, jitterRatio: 0.5 },
       3,
       function (delays) {
@@ -1164,8 +740,7 @@ describe('retry delay', function () {
         assertRange(delay / 2, delay, delays[0])
         assertRange(delay, delay * 2, delays[1])
         assertRange(delay * 2, delay * 4, delays[2])
-      },
-      done
+      }
     )
   })
 })
@@ -1183,92 +758,78 @@ describe('readyState', function () {
     assert.equal(2, EventSource.CLOSED)
   })
 
-  it('has readystate constants on instances', function (done) {
-    var es = new EventSource('http://localhost:' + _port)
+  it('has readystate constants on instances', function () {
+    var es = new EventSource('http://localhost:' + deliberatelyUnusedPort)
     es.onerror = function () {}
     assert.equal(EventSource.CONNECTING, es.CONNECTING, 'constant CONNECTING missing/invalid')
     assert.equal(EventSource.OPEN, es.OPEN, 'constant OPEN missing/invalid')
     assert.equal(EventSource.CLOSED, es.CLOSED, 'constant CLOSED missing/invalid')
 
     es.close()
-    done()
   })
 
-  it('is CONNECTING before connection has been established', function (done) {
-    var es = new EventSource('http://localhost:' + _port)
+  it('is CONNECTING before connection has been established', function () {
+    var es = new EventSource('http://localhost:' + deliberatelyUnusedPort)
     es.onerror = function () {}
     assert.equal(EventSource.CONNECTING, es.readyState)
     es.close()
-    done()
   })
 
-  it('is CONNECTING when server has closed the connection', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('is CONNECTING when server has closed the connection', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents([]))
 
-      server.on('request', writeEvents([]))
-      var es = new EventSource(server.url, { initialRetryDelayMillis: 10 })
+      await withEventSource(server, { initialRetryDelayMillis: 10 }, async es => {
+        const errors = startErrorQueue(es)
 
-      es.onerror = function () {
-        var state = es.readyState
-        es.close()
-        assert.equal(EventSource.CONNECTING, state)
-        done()
-      }
+        await waitForOpenEvent(es)
 
-      es.onopen = function (m) {
-        server.close(function (err) {
-          if (err) return done(err)
-        })
-      }
+        server.close()
+
+        await errors.take()
+
+        assert.equal(es.readyState, EventSource.CONNECTING)
+      })
     })
   })
 
-  it('is OPEN when connection has been established', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('is OPEN when connection has been established', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents([]))
 
-      server.on('request', writeEvents([]))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
+      await withEventSource(server, async es => {
+        await waitForOpenEvent(es)
 
-      es.onopen = function () {
-        var state = es.readyState
-        es.close()
-        assert.equal(EventSource.OPEN, state)
-        server.close(done)
-      }
+        assert.equal(es.readyState, EventSource.OPEN)
+      })
     })
   })
 
-  it('is CLOSED after connection has been closed', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('is CLOSED after connection has been closed', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents([]))
 
-      server.on('request', writeEvents([]))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
+      await withEventSource(server, async es => {
+        await waitForOpenEvent(es)
 
-      es.onopen = function () {
         es.close()
-        assert.equal(EventSource.CLOSED, es.readyState)
-        server.close(done)
-      }
+
+        assert.equal(es.readyState, EventSource.CLOSED)
+      })
     })
   })
 })
 
 describe('Methods', function () {
-  it('close method exists and can be called to close an eventsource', function (done) {
-    createServer(function (err, server) {
-      server.on('request', writeEvents([]))
-      if (err) return done(err)
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-      es.onopen = function () {
+  it('close method exists and can be called to close an eventsource', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents([]))
+
+      await withEventSource(server, async es => {
+        await waitForOpenEvent(es)
+
         assert.equal(es.close(), undefined)
-        server.close(done)
-      }
+      })
     })
   })
 
@@ -1279,7 +840,7 @@ describe('Methods', function () {
 
 describe('Properties', function () {
   it('url exposes original request url', function () {
-    var url = 'http://localhost:' + _port
+    var url = 'http://localhost:' + deliberatelyUnusedPort
     var es = new EventSource(url)
     es.onerror = function () {}
     es.close()
@@ -1288,308 +849,227 @@ describe('Properties', function () {
 })
 
 describe('Events', function () {
-  it('calls onopen when connection is established', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('calls onopen when connection is established', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents([]))
 
-      server.on('request', writeEvents([]))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
+      await withEventSource(server, async es => {
+        const opened = new AsyncQueue()
+        es.onopen = e => opened.add(e)
 
-      es.onopen = function (event) {
-        es.close()
-        assert.equal(event.type, 'open')
-        server.close(done)
-      }
-    })
-  })
-
-  it('supplies the correct origin', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      server.on('request', writeEvents(['data: hello\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.onmessage = function (event) {
-        es.close()
-        assert.equal(event.origin, server.url)
-        server.close(done)
-      }
-    })
-  })
-
-  it('emits open event when connection is established', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      server.on('request', writeEvents([]))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.addEventListener('open', function (event) {
-        es.close()
-        assert.equal(event.type, 'open')
-        server.close(done)
+        const e = await opened.take()
+        assert.equal(e.type, 'open')
       })
     })
   })
 
-  it('does not double reconnect when connection is closed by server', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('supplies the correct origin', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: hello\n\n']))
 
-      var numConnections = 0
-      server.on('request', function (req, res) {
+      await withEventSource(server, async es => {
+        const messages = startMessageQueue(es)
+        const m = await messages.take()
+        assert.equal(m.origin, server.url)
+      })
+    })
+  })
+
+  it('emits open event when connection is established', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents([]))
+
+      await withEventSource(server, async es => {
+        const e = await waitForOpenEvent(es)
+        assert.equal(e.type, 'open')
+      })
+    })
+  })
+
+  it('does not double reconnect when connection is closed by server', async () => {
+    await withServer(async server => {
+      let numConnections = 0
+      server.byDefault((req, res) => {
         numConnections++
-        writeEvents([])(req, res)
-
-        if (numConnections > 2) done(new Error('reopening too many connections'))
         // destroy only the first connection - expected only 1 other reconnect
         if (numConnections === 1) {
-          process.nextTick(function () {
-            req.destroy()
-          })
+          res.end()
+        } else {
+          writeEvents([])(req, res)
         }
       })
-      const es = new EventSource(server.url)
-      es.onerror = function () {}
-      es.reconnectInterval = 50
 
-      setTimeout(function () {
-        es.close()
-        server.close(done)
-      }, 350)
-    })
-  })
+      await withEventSource(server, async es => {
+        es.reconnectInterval = 50
 
-  it('does not emit error when connection is closed by client', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+        await server.nextRequest()
+        await server.nextRequest()
 
-      server.on('request', writeEvents([]))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.addEventListener('open', function () {
-        es.close()
-        process.nextTick(function () {
-          server.close(done)
-        })
-      })
-      es.addEventListener('error', function () {
-        done(new Error('error should not be emitted'))
+        await sleepAsync(300)
+        assert.ok(server.requests.isEmpty(), 'received too many connections')
       })
     })
   })
 
-  it('populates message\'s lastEventId correctly when the last event has an associated id', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('does not emit error when connection is closed by client', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents([]))
 
-      server.on('request', writeEvents(['id: 123\ndata: hello\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
+      await withEventSource(server, async es => {
+        const errors = startErrorQueue(es)
+        await waitForOpenEvent(es)
 
-      es.onmessage = function (m) {
         es.close()
+
+        await expectNothingReceived(errors)
+      })
+    })
+  })
+
+  it('populates message\'s lastEventId correctly when the last event has an associated id', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['id: 123\ndata: hello\n\n']))
+
+      await withEventSource(server, async es => {
+        const messages = startMessageQueue(es)
+        const m = await messages.take()
         assert.equal(m.lastEventId, '123')
-        server.close(done)
-      }
+      })
     })
   })
 
-  it('populates message\'s lastEventId correctly when the last event doesn\'t have an associated id', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('populates message\'s lastEventId correctly when the last event doesn\'t have an associated id', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['id: 123\ndata: Hello\n\n', 'data: World\n\n']))
 
-      server.on('request', writeEvents(['id: 123\ndata: Hello\n\n', 'data: World\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
+      await withEventSource(server, async es => {
+        const messages = startMessageQueue(es)
 
-      es.onmessage = first
+        const m1 = await messages.take()
+        assert.equal(m1.lastEventId, '123')
 
-      function first () {
-        es.onmessage = second
-      }
-
-      function second (m) {
-        es.close()
-        assert.equal(m.data, 'World')
-        assert.equal(m.lastEventId, '123')  // expect to get back the previous event id
-        server.close(done)
-      }
+        const m2 = await messages.take()
+        assert.equal(m2.lastEventId, '123')
+      })
     })
   })
 
-  it('populates messages with enumerable properties so they can be inspected via console.log().', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('populates messages with enumerable properties so they can be inspected via console.log().', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: World\n\n']))
 
-      server.on('request', writeEvents(['data: World\n\n']))
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
+      await withEventSource(server, async es => {
+        const messages = startMessageQueue(es)
+        const m = await messages.take()
 
-      es.onmessage = function (m) {
-        es.close()
-        var enumerableAttributes = Object.keys(m)
+        const enumerableAttributes = Object.keys(m)
         assert.notEqual(enumerableAttributes.indexOf('data'), -1)
         assert.notEqual(enumerableAttributes.indexOf('type'), -1)
-        server.close(done)
-      }
-    })
-  })
-
-  it('throws error if the message type is unspecified, \'\' or null', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      assert.throws(function () { es.dispatchEvent({}) })
-      assert.throws(function () { es.dispatchEvent({type: undefined}) })
-      assert.throws(function () { es.dispatchEvent({type: ''}) })
-      assert.throws(function () { es.dispatchEvent({type: null}) })
-
-      es.close()
-      server.close(done)
-    })
-  })
-
-  it('delivers the dispatched event without payload', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.addEventListener('greeting', function (m) {
-        es.close()
-        server.close(done)
       })
-
-      es.dispatchEvent({type: 'greeting'})
     })
   })
 
-  it('delivers the dispatched event with payload', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      var es = new EventSource(server.url)
-      es.onerror = function () {}
-
-      es.addEventListener('greeting', function (m) {
-        es.close()
-        assert.equal('Hello', m.data)
-        server.close(done)
+  it('throws error if the message type is unspecified, \'\' or null', async () => {
+    await withServer(async server => {
+      await withEventSource(server, async es => {
+        assert.throws(function () { es.dispatchEvent({}) })
+        assert.throws(function () { es.dispatchEvent({type: undefined}) })
+        assert.throws(function () { es.dispatchEvent({type: ''}) })
+        assert.throws(function () { es.dispatchEvent({type: null}) })
       })
+    })
+  })
 
-      es.dispatchEvent({type: 'greeting', detail: {data: 'Hello'}})
+  it('delivers the dispatched event without payload', async () => {
+    await withServer(async server => {
+      await withEventSource(server, async es => {
+        const messages = new AsyncQueue()
+        es.addEventListener('greeting', m => messages.add(m))
+
+        es.dispatchEvent({ type: 'greeting' })
+
+        await messages.take()
+      })
+    })
+  })
+
+  it('delivers the dispatched event with payload', async () => {
+    await withServer(async server => {
+      await withEventSource(server, async es => {
+        const messages = new AsyncQueue()
+        es.addEventListener('greeting', m => messages.add(m))
+
+        es.dispatchEvent({ type: 'greeting', detail: {data: 'Hello'} })
+
+        const m = await messages.take()
+        assert.equal(m.data, 'Hello')
+      })
     })
   })
 })
 
 describe('Proxying', function () {
-  it('proxies http->http requests', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('proxies http->http requests', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: World\n\n']))
 
-      server.on('request', writeEvents(['data: World\n\n']))
-
-      createProxy(server.url, 'http', function (err, proxy) {
-        if (err) return done(err)
-
-        var es = new EventSource(server.url, {proxy: proxy.url})
-        es.onerror = function () {}
-        es.onmessage = function (m) {
-          assert.equal(m.data, 'World')
-          proxy.close(function () {
-            server.close(done)
-          })
-        }
+      await withCloseable(TestHttpServers.startProxy, async proxy => {
+        await withEventSource(server, { proxy: proxy.url }, async es => {
+          await shouldReceiveMessages(es, [
+            { data: 'World' }
+          ])
+        })
       })
     })
   })
 
-  it('proxies http->https requests', function (done) {
-    createHttpsServer(function (err, server) {
-      if (err) return done(err)
+  it('proxies https->http requests', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: World\n\n']))
 
-      server.on('request', writeEvents(['data: World\n\n']))
-
-      createProxy(server.url, 'http', function (err, proxy) {
-        if (err) return done(err)
-
-        var es = new EventSource(server.url, {proxy: proxy.url})
-        es.onerror = function () {}
-        es.onmessage = function (m) {
-          assert.equal(m.data, 'World')
-          proxy.close(function () {
-            server.close(done)
-          })
-        }
+      await withCloseable(TestHttpServers.startSecureProxy, async proxy => {
+        await withEventSource(server, { proxy: proxy.url, rejectUnauthorized: false }, async es => {
+          await shouldReceiveMessages(es, [
+            { data: 'World' }
+          ])
+        })
       })
     })
   })
 
-  it('proxies https->http requests', function (done) {
-    createHttpsServer(function (err, server) {
-      if (err) return done(err)
+  it('can use a tunneling agent with a proxy', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: World\n\n']))
 
-      server.on('request', writeEvents(['data: World\n\n']))
-
-      createProxy(server.url, 'https', function (err, proxy) {
-        if (err) return done(err)
-
-        var es = new EventSource(server.url, {proxy: proxy.url, rejectUnauthorized: false})
-        es.onerror = function () {}
-        es.onmessage = function (m) {
-          assert.equal(m.data, 'World')
-          proxy.close(function () {
-            server.close(done)
-          })
-        }
-      })
-    })
-  })
-
-  it('can use a tunneling agent with a proxy', function (done) {
-    createServer(function (err, server) {
-      if (err) return done(err)
-
-      server.on('request', writeEvents(['data: World\n\n']))
-
-      helpers.TestHttpServers.startProxy().then(function (proxyServer) {
+      await withCloseable(TestHttpServers.startProxy, async proxyServer => {
         const agent = tunnel.httpOverHttp({proxy: {host: proxyServer.hostname, port: proxyServer.port}})
 
-        var es = new EventSource(server.url, {agent: agent})
-        es.onerror = function (e) {
-          console.log('*** err: ' + e)
-          done(e)
-        }
-        es.onmessage = function (m) {
-          assert.equal(m.data, 'World')
+        await withEventSource(server, { agent }, async es => {
+          const errors = startErrorQueue(es)
+
+          await shouldReceiveMessages(es, [
+            { data: 'World' }
+          ])
 
           assert.equal(proxyServer.requestCount(), 1)
-          proxyServer.nextRequest().then(function (req) {
-            assert.equal(req.path, server.url)
-            proxyServer.close()
-            server.close(done)
-          })
-        }
+          const req = await proxyServer.nextRequest()
+          assert.equal(req.path, server.url)
+
+          if (!errors.isEmpty()) {
+            const err = await errors.take()
+            throw err
+          }
+        })
       })
     })
   })
 })
 
 describe('read timeout', function () {
-  var briefDelay = 1
+  const briefDelay = 1
 
   function makeStreamHandler (timeBetweenEvents) {
-    var requestCount = 0
+    let requestCount = 0
     return function (req, res) {
       requestCount++
       res.writeHead(200, {'Content-Type': 'text/event-stream'})
@@ -1606,65 +1086,62 @@ describe('read timeout', function () {
     }
   }
 
-  it('drops connection if read timeout elapses', function (done) {
-    var readTimeout = 50
-    var timeBetweenEvents = 100
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('drops connection if read timeout elapses', async () => {
+    const readTimeout = 50
+    const timeBetweenEvents = 100
+    await withServer(async server => {
+      server.byDefault(makeStreamHandler(timeBetweenEvents))
 
-      server.on('request', makeStreamHandler(timeBetweenEvents))
-
-      var es = new EventSource(server.url, {
+      const opts = {
         initialRetryDelayMillis: briefDelay,
         readTimeoutMillis: readTimeout
+      }
+      await withEventSource(server, opts, async es => {
+        const messagesOrErrors = new AsyncQueue()
+        es.onmessage = e => messagesOrErrors.add(e)
+        es.onerror = e => messagesOrErrors.add(e)
+
+        const m1 = await messagesOrErrors.take()
+        assert.equal(m1.type, 'message')
+        assert.equal(m1.data, 'request-1-event-1')
+
+        const err = await messagesOrErrors.take()
+        assert.equal(err.type, 'error')
+        assert.ok(/^Read timeout/.test(err.message),
+          'Unexpected error message: ' + err.message)
+
+        const m2 = await messagesOrErrors.take()
+        assert.equal(m2.type, 'message')
+        assert.equal(m2.data, 'request-2-event-1')
       })
-      var events = []
-      var errors = []
-      es.onmessage = function (event) {
-        events.push(event)
-        if (events.length === 2) {
-          es.close()
-          assert.equal('request-1-event-1', events[0].data)
-          assert.equal('request-2-event-1', events[1].data)
-          assert.equal(1, errors.length)
-          assert.ok(/^Read timeout/.test(errors[0].message),
-            'Unexpected error message: ' + errors[0].message)
-          server.close(done)
-        }
-      }
-      es.onerror = function (err) {
-        errors.push(err)
-      }
     })
   })
 
-  it('does not drop connection if read timeout does not elapse', function (done) {
-    var readTimeout = 100
-    var timeBetweenEvents = 50
-    createServer(function (err, server) {
-      if (err) return done(err)
+  it('does not drop connection if read timeout does not elapse', async () => {
+    const readTimeout = 100
+    const timeBetweenEvents = 50
+    await withServer(async server => {
+      server.byDefault(makeStreamHandler(timeBetweenEvents))
 
-      server.on('request', makeStreamHandler(timeBetweenEvents))
-
-      var es = new EventSource(server.url, {
+      const opts = {
         initialRetryDelayMillis: briefDelay,
         readTimeoutMillis: readTimeout
+      }
+      await withEventSource(server, opts, async es => {
+        const messagesOrErrors = new AsyncQueue()
+        es.onmessage = e => messagesOrErrors.add(e)
+        es.onerror = e => messagesOrErrors.add(e)
+
+        const m1 = await messagesOrErrors.take()
+        assert.equal(m1.type, 'message')
+        assert.equal(m1.data, 'request-1-event-1')
+
+        const m2 = await messagesOrErrors.take()
+        assert.equal(m2.type, 'message')
+        assert.equal(m2.data, 'request-1-event-2')
+
+        expectNothingReceived(messagesOrErrors)
       })
-      var events = []
-      var errors = []
-      es.onmessage = function (event) {
-        events.push(event)
-        if (events.length === 2) {
-          es.close()
-          assert.equal('request-1-event-1', events[0].data)
-          assert.equal('request-1-event-2', events[1].data)
-          assert.equal(0, errors.length)
-          server.close(done)
-        }
-      }
-      es.onerror = function (err) {
-        errors.push(err)
-      }
     })
   })
 })
