@@ -42,7 +42,7 @@
     "webpack": "^3.5.6"
   },
   "scripts": {
-    "test": "mocha --reporter spec --exit && standard",
+    "test": "mocha --reporter spec --exit && standard 'src/**/*.js' 'test/**/*.js'",
     "polyfill": "webpack lib/eventsource-polyfill.js example/eventsource-polyfill.js",
     "coverage": "nyc --reporter=html --reporter=text _mocha --reporter spec"
   },
