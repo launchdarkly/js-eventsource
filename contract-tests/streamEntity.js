@@ -6,9 +6,9 @@ const { EventSource } = require('launchdarkly-eventsource');
 function StreamEntity(options) {
   const s = {};
   const listeningForType = {};
-  const messageOutbox = [];
   const tag = options.tag;
   let closed = false;
+  let callbackCounter = 0;
 
   function log(s) {
     console.log(`[${tag}] INFO: ${s}`);
@@ -22,39 +22,22 @@ function StreamEntity(options) {
     if (closed) {
       return;
     }
-    messageOutbox.push(message);
-    if (messageOutbox.length === 1) {
-      deliverNextMessage();
-    }
-  }
-
-  function deliverNextMessage() {
-    // This logic is necessary to ensure that the callback messages are delivered in
-    // the same order that they were generated in, because events are fired to us in
-    // an asynchronous way that could be interleaved with outgoing HTTP requests.
-    if (messageOutbox.length === 0 || closed) {
-      return;
-    }
-    message = messageOutbox[0];
-    const callbackUrl = url.parse(options.callbackUrl);
+    callbackCounter++;
+    const callbackUrl = options.callbackUrl + '/' + callbackCounter;
     const reqParams = {
-      ...callbackUrl,
+      ...url.parse(callbackUrl),
       method: 'POST',
       headers: { 'Content-Type': 'application/json '}
     };
     const req = http.request(reqParams, res => {
       if (!closed && res.statusCode >= 300) {
-        logError(`Callback request returned HTTP error ${res.statusCode}`);
+        logError(`Callback to ${callbackUrl} returned HTTP error ${res.statusCode}`);
       }
-      messageOutbox.shift();
-      deliverNextMessage();
     });
     req.on('error', e => {
       if (!closed) {
-        logError(`Callback request failed: ${e}`);
+        logError(`Callback to ${callbackUrl} failed: ${e}`);
       }
-      messageOutbox.shift();
-      deliverNextMessage();
     });
     req.write(JSON.stringify(message));
     req.end();
