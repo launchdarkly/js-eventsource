@@ -310,6 +310,19 @@ describe('Parser', () => {
     })
   })
 
+  it('treats field name without colon as a field with an empty value', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data\n\ndata\ndata\n\n']))
+
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: '' },
+          { data: '\n' }
+        ])
+      })
+    })
+  })
+
   it('causes entire event to be ignored for empty event field', async () => {
     await withServer(async server => {
       server.byDefault(writeEvents(['event:\n\ndata: Hello\n\n']))
@@ -950,6 +963,18 @@ describe('Events', function () {
 
         const m2 = await messages.take()
         assert.equal(m2.lastEventId, '123')
+      })
+    })
+  })
+
+  it('ignores event ID that contains a null', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['id: 12\u00003\ndata: hello\n\n']))
+
+      await withEventSource(server, async es => {
+        const messages = startMessageQueue(es)
+        const m = await messages.take()
+        assert.equal(m.lastEventId, '')
       })
     })
   })
