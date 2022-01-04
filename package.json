@@ -1,6 +1,6 @@
 {
   "name": "launchdarkly-eventsource",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Fork of eventsource package - W3C compliant EventSource client for Node.js and browser (polyfill)",
   "keywords": [
     "eventsource",
@@ -32,7 +32,7 @@
   "devDependencies": {
     "buffer-from": "^1.1.1",
     "express": "^4.15.3",
-    "launchdarkly-js-test-helpers": "1.2.0",
+    "launchdarkly-js-test-helpers": "2.1.1",
     "mocha": "5.2.0",
     "nyc": "^15.0.0",
     "serve-static": "^1.12.3",
@@ -42,7 +42,7 @@
     "webpack": "^3.5.6"
   },
   "scripts": {
-    "test": "mocha --reporter spec --exit && standard",
+    "test": "mocha --reporter spec --exit && standard 'src/**/*.js' 'test/**/*.js'",
     "polyfill": "webpack lib/eventsource-polyfill.js example/eventsource-polyfill.js",
     "coverage": "nyc --reporter=html --reporter=text _mocha --reporter spec"
   },

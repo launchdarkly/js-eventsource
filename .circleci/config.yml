@@ -25,13 +25,19 @@ node-template: &node-template
     - store_artifacts:
         path: reports/junit
 
+    - run: make build-contract-tests
+    - run:
+        command: make start-contract-test-service
+        background: true
+    - run: make run-contract-tests
+
 jobs:
   oldest-long-term-support-release:
     <<: *node-template
     docker:
-      - image: cimg/node:current
+      - image: cimg/node:12.22
 
   current-release:
     <<: *node-template
     docker:
-      - image: circleci/node:latest
+      - image: cimg/node:current

@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [1.4.2] - 2022-01-04
+### Fixed:
+- If the stream URL contained user/password basicauth fields, they were not being included in the request.
+- Some unsupported options were accidentally being passed to `http.request` and `https.request`. This did not affect Node itself, but it could cause problems when using interceptors that inspect the options, as discussed [here](https://github.com/mswjs/interceptors/issues/188).
+
 ## [1.4.1] - 2021-05-10
 ### Fixed:
 - Updated the dependency on the package `original` in order to pick up a newer version of the transitive dependency `url-parse`. Older versions of `url-parse` had a [known vulnerability](https://github.com/advisories/GHSA-9m6j-fcg5-2442). (Thanks, [m-schrepel](https://github.com/launchdarkly/js-eventsource/pull/11)!)
