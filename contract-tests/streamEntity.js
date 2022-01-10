@@ -81,9 +81,10 @@ function StreamEntity(options) {
   s.doCommand = params => {
     switch (params.command) {
       case 'listen':
-        if (!listeningForType[params.type]) {
-          listeningForType[params.type] = true;
-          s.sse.addEventListener(params.type, s.onMessage);
+        const eventType = params.listen.type;
+        if (!listeningForType[eventType]) {
+          listeningForType[eventType] = true;
+          s.sse.addEventListener(eventType, s.onMessage);
         }
         return true;
 
