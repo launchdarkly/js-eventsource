@@ -43,5 +43,3 @@ jobs:
         with:
           name: test-harness-${{ matrix.node }}
           path: test-harness.log
-        
-      
