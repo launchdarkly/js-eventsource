@@ -5,3 +5,4 @@ yarn.lock
 .nyc_output
 /coverage
 package-lock.json
+tmp

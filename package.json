@@ -44,7 +44,8 @@
   "scripts": {
     "test": "mocha --reporter spec --exit && standard 'src/**/*.js' 'test/**/*.js'",
     "polyfill": "webpack lib/eventsource-polyfill.js example/eventsource-polyfill.js",
-    "coverage": "nyc --reporter=html --reporter=text _mocha --reporter spec"
+    "coverage": "nyc --reporter=html --reporter=text _mocha --reporter spec",
+    "act": "gh act --artifact-server-path=./tmp --env ACTIONS_RUNTIME_TOKEN=foo --env ACTIONS_RUNTIME_URL=http://localhost:8080/"
   },
   "engines": {
     "node": ">=0.12.0"

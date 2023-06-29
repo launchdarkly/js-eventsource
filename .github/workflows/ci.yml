@@ -1,0 +1,47 @@
+name: ci
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md' #Do not need to run CI for markdown changes.
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [14, latest]
+      max-parallel: 1
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+      - name: NPM Install
+        run: npm install
+      - name: Run Unit Tests
+        run: npm run test
+      - name: Build Contract Tests
+        run: make build-contract-tests
+      - name: Run Contract Tests
+        run: |
+          make start-contract-test-service > test-service.log 2>&1 & disown
+          make run-contract-tests | tee test-harness.log
+      - name: Upload Test Service Logs
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-service-${{ matrix.node }}
+          path: test-service.log
+      - name: Upload Test Harness Logs
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-harness-${{ matrix.node }}
+          path: test-harness.log
+        
+      
