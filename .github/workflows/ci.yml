@@ -1,7 +1,7 @@
 name: ci
 on:
   push:
-    branches: [main]
+    branches: [main, rlamb/exponential-doubling-capacity-scaling]
     paths-ignore:
       - '**.md' #Do not need to run CI for markdown changes.
   pull_request:
