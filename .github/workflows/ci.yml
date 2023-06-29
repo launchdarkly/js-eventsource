@@ -30,6 +30,7 @@ jobs:
       - name: Run Contract Tests
         run: |
           make start-contract-test-service > test-service.log 2>&1 & disown
+          set -o pipefail
           make run-contract-tests | tee test-harness.log
       - name: Upload Test Service Logs
         uses: actions/upload-artifact@v3
