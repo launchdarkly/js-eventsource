@@ -1,6 +1,6 @@
 const express = require('express')
 const serveStatic = require('serve-static')
-const SseStream = require('ssestream')
+const SseStream = require('ssestream').default
 
 const app = express()
 app.use(serveStatic(__dirname))

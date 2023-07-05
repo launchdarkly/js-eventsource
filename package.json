@@ -30,26 +30,33 @@
     }
   ],
   "devDependencies": {
+    "buffer": "^6.0.3",
     "buffer-from": "^1.1.1",
+    "events": "^3.3.0",
     "express": "^4.15.3",
+    "https-browserify": "^1.0.0",
     "launchdarkly-js-test-helpers": "2.1.1",
     "mocha": "5.2.0",
     "nyc": "^15.0.0",
+    "process": "^0.11.10",
     "serve-static": "^1.12.3",
     "ssestream": "^1.0.0",
     "standard": "^10.0.2",
+    "stream-http": "^3.2.0",
     "tunnel": "0.0.6",
-    "webpack": "^3.5.6"
+    "url": "^0.11.1",
+    "util": "^0.12.5",
+    "webpack": "^5.88.1",
+    "webpack-cli": "^5.1.4"
   },
   "scripts": {
     "test": "mocha --reporter spec --exit && standard 'src/**/*.js' 'test/**/*.js'",
-    "polyfill": "webpack lib/eventsource-polyfill.js example/eventsource-polyfill.js",
+    "polyfill": "rm -f example/eventsource-polyfill.js && webpack ./lib/eventsource-polyfill.js -o ./example",
     "coverage": "nyc --reporter=html --reporter=text _mocha --reporter spec"
   },
   "engines": {
     "node": ">=0.12.0"
   },
-  "dependencies": {},
   "standard": {
     "ignore": [
       "example/eventsource-polyfill.js"

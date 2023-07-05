@@ -27,6 +27,7 @@
 
 <script>
 function subscribe(es, ul) {
+  console.log("Stuff");
   es.addEventListener('server-time', function (e) {
     var li = document.createElement("LI");
     li.appendChild(document.createTextNode(e.data));
@@ -34,7 +35,7 @@ function subscribe(es, ul) {
   });
 }
 
-subscribe(new EventSource('/sse'),         document.getElementById('es-messages'));
-subscribe(new EventSourcePolyfill('/sse'), document.getElementById('es-polyfill-messages'));
+// subscribe(new EventSource('/sse'),         document.getElementById('es-messages'));
+subscribe(new EventSourcePolyfill('http://localhost:8080/sse'), document.getElementById('es-polyfill-messages'));
 </script>
 </body>
