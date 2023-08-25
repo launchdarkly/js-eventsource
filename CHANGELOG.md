@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.0.0] - 2023-07-05
+### Changed:
+- Changed the way allocations are handled when receiving a line over multiple chunks. Instead of concatenating buffers together as they are received, instead an exponential doubling capacity algorithm will be used to allocate buffers to which multiple chunks may be copied. The algorithm will double until the excess capacity allocated reaches 1MiB. At that point subsequent re-allocations will allocate at maximum 1MiB of extra capacity.
+
 ## [1.4.4] - 2022-03-10
 ### Fixed:
 - Removed the dependency on the [`original`](https://www.npmjs.com/package/original) package. A transitive dependency of this package was flagged in [CVE-2022-0686](https://nvd.nist.gov/vuln/detail/CVE-2022-0686).
