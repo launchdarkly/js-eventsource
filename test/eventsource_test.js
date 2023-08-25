@@ -377,6 +377,19 @@ describe('Parser', () => {
       })
     })
   })
+
+  it('two messages spanning 3 chunks with shared chunk', async () => {
+    await withServer(async server => {
+      server.byDefault(writeEvents(['data: Hel', 'lo\n\ndata:', 'World\n\n']))
+
+      await withEventSource(server, async es => {
+        await shouldReceiveMessages(es, [
+          { data: 'Hello' },
+          { data: 'World' }
+        ])
+      })
+    })
+  })
 })
 
 describe('HTTP Request', () => {
