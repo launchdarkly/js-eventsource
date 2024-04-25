@@ -6,3 +6,4 @@ yarn.lock
 /coverage
 package-lock.json
 tmp
+.vscode

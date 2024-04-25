@@ -1,0 +1,41 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-package:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Needed if using OIDC to get release secrets.
+      contents: write # Contents and pull-requests are for release-please to make releases.
+      pull-requests: write
+
+    steps:
+      - uses: google-github-actions/release-please-action@v4
+        id: release
+        with:
+          token: ${{secrets.GITHUB_TOKEN}}
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.releases_created }}
+
+      - uses: actions/setup-node@v4
+        if: ${{ steps.release.outputs.releases_created == true }}
+        with:
+          node-version: 20.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: launchdarkly/gh-actions/actions/release-secrets@release-secrets-v1.0.0
+        name: 'Get the NPM token'
+        with:
+          aws_assume_role: ${{ vars.AWS_ROLE_ARN }}
+          ssm_parameter_pairs: '/production/common/releasing/npm/token = NODE_AUTH_TOKEN'
+
+      - uses: ./.github/actions/publish
+        name: Publish Package to npm
+        with:
+          prerelease: false
+          dry_run: false
