@@ -6,24 +6,31 @@ on:
       - main
 
 jobs:
-  release-package:
+  release-please:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write # Needed if using OIDC to get release secrets.
-      contents: write # Contents and pull-requests are for release-please to make releases.
-      pull-requests: write
-
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
     steps:
       - uses: google-github-actions/release-please-action@v4
         id: release
         with:
           token: ${{secrets.GITHUB_TOKEN}}
+          release-type: "go"
 
+  release-package:
+    runs-on: ubuntu-latest
+    needs: [ release-please ]
+    permissions:
+      id-token: write # Needed if using OIDC to get release secrets.
+      contents: write # Contents and pull-requests are for release-please to make releases.
+      pull-requests: write
+
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+
+    steps:
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.releases_created }}
 
       - uses: actions/setup-node@v4
-        if: ${{ steps.release.outputs.releases_created == true }}
         with:
           node-version: 20.x
           registry-url: 'https://registry.npmjs.org'
