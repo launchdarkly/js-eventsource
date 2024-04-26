@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.0.2](https://github.com/launchdarkly/js-eventsource/compare/2.0.1...v2.0.2) (2024-04-26)
+
+
+### Bug Fixes
+
+* Include message for closed or ended event source connections. ([#24](https://github.com/launchdarkly/js-eventsource/issues/24)) ([48f4cc1](https://github.com/launchdarkly/js-eventsource/commit/48f4cc1313f830c17fa82d6046baacfdb6cf76c4))
+
 ## [2.0.1] - 2023-08-28
 ### Fixed:
 - Fixed an issue in the pre-allocation algorithm handling partial messages.
