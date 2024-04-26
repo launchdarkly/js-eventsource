@@ -15,7 +15,6 @@ jobs:
         id: release
         with:
           token: ${{secrets.GITHUB_TOKEN}}
-          release-type: "go"
 
   release-package:
     runs-on: ubuntu-latest
