@@ -4675,7 +4675,7 @@ var IncomingMessage = exports.IncomingMessage = function (xhr, response, mode, f
 		self.url = response.url
 		self.statusCode = response.status
 		self.statusMessage = response.statusText
-
+		
 		response.headers.forEach(function (header, key){
 			self.headers[key.toLowerCase()] = header
 			self.rawHeaders.push(key, header)
@@ -4805,7 +4805,7 @@ IncomingMessage.prototype._onXHRProgress = function () {
 				self.push(new Buffer(response))
 				break
 			}
-			// Falls through in IE8
+			// Falls through in IE8	
 		case 'text':
 			try { // This will fail when readyState = 3 in IE9. Switch mode and wait for readyState = 4
 				response = xhr.responseText
@@ -7265,6 +7265,19 @@ function hasBom (buf) {
 }
 
 /**
+ * Wrap a callback to ensure it can only be called once.
+ */
+function once(cb) {
+  let called = false;
+  return (...params) => {
+    if(!called) {
+      called = true;
+      cb(...params);
+    }
+  };
+}
+
+/**
  * Creates a new EventSource object
  *
  * @param {String} url the URL to which to connect
@@ -7289,6 +7302,7 @@ function EventSource (url, eventSourceInitDict) {
 
   var self = this
   self.reconnectInterval = 1000
+  self.session = 0
 
   var req
   var lastEventId = ''
@@ -7428,12 +7442,17 @@ function EventSource (url, eventSourceInitDict) {
     var isSecure = urlAndOptions.options.protocol === 'https:' ||
       (urlAndOptions.url && urlAndOptions.url.startsWith('https:'))
 
+    self.session = self.session + 1
+
+    // Each request should be able to fail at most once.
+    const failOnce = once(failed);
+
     var callback = function (res) {
       // Handle HTTP redirects
       if (res.statusCode === 301 || res.statusCode === 307) {
         if (!res.headers.location) {
           // Server sent redirect response without Location header.
-          failed({ status: res.statusCode, message: res.statusMessage })
+          failOnce({ status: res.statusCode, message: res.statusMessage })
           return
         }
         if (res.statusCode === 307) reconnectUrl = url
@@ -7444,7 +7463,7 @@ function EventSource (url, eventSourceInitDict) {
 
       // Handle HTTP errors
       if (res.statusCode !== 200) {
-        failed({ status: res.statusCode, message: res.statusMessage })
+        failOnce({ status: res.statusCode, message: res.statusMessage })
         return
       }
 
@@ -7456,13 +7475,13 @@ function EventSource (url, eventSourceInitDict) {
       res.on('close', function () {
         res.removeAllListeners('close')
         res.removeAllListeners('end')
-        failed()
+        failOnce()
       })
 
       res.on('end', function () {
         res.removeAllListeners('close')
         res.removeAllListeners('end')
-        failed()
+        failOnce()
       })
       _emit(new Event('open'))
 
@@ -7561,11 +7580,11 @@ function EventSource (url, eventSourceInitDict) {
     }
 
     req.on('error', function (err) {
-      failed({ message: err.message })
+      failOnce({ message: err.message })
     })
 
     req.on('timeout', function () {
-      failed({ message: 'Read timeout, received no data in ' + config.readTimeoutMillis +
+      failOnce({ message: 'Read timeout, received no data in ' + config.readTimeoutMillis +
           'ms, assuming connection is dead' })
     })
 
