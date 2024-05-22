@@ -7432,9 +7432,7 @@ function EventSource (url, eventSourceInitDict) {
     event.delayMillis = delay
     _emit(event)
 
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer)
-    }
+    clearTimeout(reconnectTimer)
 
     reconnectTimer = setTimeout(function () {
       if (readyState !== EventSource.CONNECTING) return
@@ -7611,10 +7609,8 @@ function EventSource (url, eventSourceInitDict) {
   }
 
   this._close = function () {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer)
-      reconnectTimer = null
-    }
+    clearTimeout(reconnectTimer)
+
     if (readyState === EventSource.CLOSED) return
     readyState = EventSource.CLOSED
 
