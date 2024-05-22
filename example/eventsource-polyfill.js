@@ -7432,8 +7432,9 @@ function EventSource (url, eventSourceInitDict) {
     event.delayMillis = delay
     _emit(event)
 
-    // this is safe. it will not error even if the timer id is undefined or null
-    clearTimeout(reconnectTimer)
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+    }
 
     reconnectTimer = setTimeout(function () {
       if (readyState !== EventSource.CONNECTING) return
