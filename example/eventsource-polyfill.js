@@ -7322,6 +7322,8 @@ function EventSource (url, eventSourceInitDict) {
 
   var streamOriginUrl = new URL(url).origin
 
+  let reconnectTimer
+
   function makeRequestUrlAndOptions () {
     // Returns { url, options }; url is null/undefined if the URL properties are in options
     var actualUrl = url
@@ -7430,7 +7432,9 @@ function EventSource (url, eventSourceInitDict) {
     event.delayMillis = delay
     _emit(event)
 
-    setTimeout(function () {
+    clearTimeout(reconnectTimer)
+
+    reconnectTimer = setTimeout(function () {
       if (readyState !== EventSource.CONNECTING) return
       connect()
     }, delay)
@@ -7605,6 +7609,8 @@ function EventSource (url, eventSourceInitDict) {
   }
 
   this._close = function () {
+    clearTimeout(reconnectTimer)
+
     if (readyState === EventSource.CLOSED) return
     readyState = EventSource.CLOSED
 
