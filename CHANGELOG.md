@@ -2,6 +2,14 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.0.3](https://github.com/launchdarkly/js-eventsource/compare/v2.0.2...2.0.3) (2024-05-22)
+
+
+### Bug Fixes
+
+* Ensure that each request can only fail once. ([#28](https://github.com/launchdarkly/js-eventsource/issues/28)) ([bcceb35](https://github.com/launchdarkly/js-eventsource/commit/bcceb359723e30024321cabe7bddd5d2ffa4434b))
+* Stop reconnect timer when event source is closed. ([#29](https://github.com/launchdarkly/js-eventsource/issues/29)) ([a73a118](https://github.com/launchdarkly/js-eventsource/commit/a73a118345dc7b251d709bf19838fc2834cdf5ca))
+
 ## [2.0.2](https://github.com/launchdarkly/js-eventsource/compare/2.0.1...v2.0.2) (2024-04-26)
 
 
