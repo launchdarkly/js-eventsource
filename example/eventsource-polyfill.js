@@ -7302,7 +7302,6 @@ function EventSource (url, eventSourceInitDict) {
 
   var self = this
   self.reconnectInterval = 1000
-  self.session = 0
 
   var req
   var lastEventId = ''
@@ -7446,8 +7445,6 @@ function EventSource (url, eventSourceInitDict) {
     var urlAndOptions = makeRequestUrlAndOptions()
     var isSecure = urlAndOptions.options.protocol === 'https:' ||
       (urlAndOptions.url && urlAndOptions.url.startsWith('https:'))
-
-    self.session = self.session + 1
 
     // Each request should be able to fail at most once.
     const failOnce = once(failed)
