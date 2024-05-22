@@ -7268,13 +7268,13 @@ function hasBom (buf) {
  * Wrap a callback to ensure it can only be called once.
  */
 function once(cb) {
-  let called = false;
+  let called = false
   return (...params) => {
     if(!called) {
-      called = true;
-      cb(...params);
+      called = true
+      cb(...params)
     }
-  };
+  }
 }
 
 /**
@@ -7322,6 +7322,8 @@ function EventSource (url, eventSourceInitDict) {
   )
 
   var streamOriginUrl = new URL(url).origin
+
+  let reconnectTimer;
 
   function makeRequestUrlAndOptions () {
     // Returns { url, options }; url is null/undefined if the URL properties are in options
@@ -7431,10 +7433,19 @@ function EventSource (url, eventSourceInitDict) {
     event.delayMillis = delay
     _emit(event)
 
-    setTimeout(function () {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+    }
+
+    reconnectTimer = setTimeout(function () {
       if (readyState !== EventSource.CONNECTING) return
       connect()
     }, delay)
+  }
+
+  function destroyRequest() {
+    if (req.destroy) req.destroy()
+    if (req.xhr && req.xhr.abort) req.xhr.abort()
   }
 
   function connect () {
@@ -7445,7 +7456,7 @@ function EventSource (url, eventSourceInitDict) {
     self.session = self.session + 1
 
     // Each request should be able to fail at most once.
-    const failOnce = once(failed);
+    const failOnce = once(failed)
 
     var callback = function (res) {
       // Handle HTTP redirects
@@ -7586,6 +7597,8 @@ function EventSource (url, eventSourceInitDict) {
     req.on('timeout', function () {
       failOnce({ message: 'Read timeout, received no data in ' + config.readTimeoutMillis +
           'ms, assuming connection is dead' })
+      // Timeout doesn't mean that the request is cancelled, just that it has elapsed the timeout.
+      destroyRequest()
     })
 
     if (req.setNoDelay) req.setNoDelay(true)
@@ -7601,10 +7614,15 @@ function EventSource (url, eventSourceInitDict) {
   }
 
   this._close = function () {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     if (readyState === EventSource.CLOSED) return
     readyState = EventSource.CLOSED
-    if (req.abort) req.abort()
-    if (req.xhr && req.xhr.abort) req.xhr.abort()
+
+    destroyRequest()
+
     _emit(new Event('closed'))
   }
 
