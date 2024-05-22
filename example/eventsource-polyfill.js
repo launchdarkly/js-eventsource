@@ -7322,7 +7322,7 @@ function EventSource (url, eventSourceInitDict) {
 
   var streamOriginUrl = new URL(url).origin
 
-  let reconnectTimer;
+  let reconnectTimer
 
   function makeRequestUrlAndOptions () {
     // Returns { url, options }; url is null/undefined if the URL properties are in options
@@ -7433,7 +7433,7 @@ function EventSource (url, eventSourceInitDict) {
     _emit(event)
 
     if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
+      clearTimeout(reconnectTimer)
     }
 
     reconnectTimer = setTimeout(function () {
@@ -7612,8 +7612,8 @@ function EventSource (url, eventSourceInitDict) {
 
   this._close = function () {
     if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
     }
     if (readyState === EventSource.CLOSED) return
     readyState = EventSource.CLOSED
