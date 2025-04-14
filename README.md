@@ -56,6 +56,18 @@ In a browser that is using native `EventSource` the extra argument would simply 
 
 Like the standard `EventSource`, this implementation emits the event `open` when a stream has been started and `error` when a stream has failed for any reason. All events have a single parameter which is an instance of the `Event` class.
 
+The `open` event has the following extended behavior: the event object will have a `headers` property which is an object representing the HTTP response headers received when opening the stream. For example:
+
+```javascript
+{
+  'content-type': 'text/event-stream; charset=utf-8',
+  'transfer-encoding': 'chunked',
+  'connection': 'close',
+  'accept-ranges': 'bytes',
+  'cache-control': 'no-cache, no-store, must-revalidate',
+}
+```
+
 The `error` event has the following extended behavior: for an HTTP error response, the event object will have a `status` property (such as `401`) and optionally a `message` property (such as `"Unauthorized"`).
 
 ```javascript
