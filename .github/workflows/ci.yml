@@ -33,13 +33,13 @@ jobs:
           set -o pipefail
           make run-contract-tests | tee test-harness.log
       - name: Upload Test Service Logs
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-service-${{ matrix.node }}
           path: test-service.log
       - name: Upload Test Harness Logs
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-harness-${{ matrix.node }}
