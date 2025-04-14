@@ -59,10 +59,11 @@ async function expectNothingReceived (q) {
   assert.ok(q.isEmpty())
 }
 
-function writeEvents (chunks) {
+function writeEvents (chunks, headers = {}) {
+  const resHeaders = Object.assign({}, headers, { 'Content-Type': 'text/event-stream' })
   const q = new AsyncQueue()
   chunks.forEach(chunk => q.add(chunk))
-  return TestHttpHandlers.chunkedStream(200, {'Content-Type': 'text/event-stream'}, q)
+  return TestHttpHandlers.chunkedStream(200, resHeaders, q)
 }
 
 function assertRange (min, max, value) {
@@ -901,13 +902,13 @@ describe('Events', function () {
     })
   })
 
-  it('emits open event when connection is established', async () => {
+  it('emits open event with headers when connection is established', async () => {
     await withServer(async server => {
-      server.byDefault(writeEvents([]))
-
+      server.byDefault(writeEvents([], { 'X-LD-EnvId': '12345' }))
       await withEventSource(server, async es => {
         const e = await waitForOpenEvent(es)
         assert.equal(e.type, 'open')
+        assert.equal(e.headers['x-ld-envid'], '12345')
       })
     })
   })
