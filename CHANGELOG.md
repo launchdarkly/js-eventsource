@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.1.0](https://github.com/launchdarkly/js-eventsource/compare/2.0.3...2.1.0) (2025-04-14)
+
+
+### Features
+
+* report event source headers on open ([#33](https://github.com/launchdarkly/js-eventsource/issues/33)) ([e8539f3](https://github.com/launchdarkly/js-eventsource/commit/e8539f39c9fad7d85419cf99595edd4244027a9d))
+
 ## [2.0.3](https://github.com/launchdarkly/js-eventsource/compare/v2.0.2...2.0.3) (2024-05-22)
 
 
