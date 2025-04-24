@@ -540,6 +540,7 @@ describe('HTTP Request', () => {
           const errors = startErrorQueue(es)
           const err = await errors.take()
           assert.equal(err.status, status)
+          assert.notEqual(err.headers, undefined)
         })
       })
     })
