@@ -2,6 +2,14 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.2.0](https://github.com/launchdarkly/js-eventsource/compare/2.1.0...2.2.0) (2025-04-25)
+
+
+### Features
+
+* error event now includes response headers ([cd6a69c](https://github.com/launchdarkly/js-eventsource/commit/cd6a69c1b897f63d5f1defa678df3b3ec41f2b39))
+* error event now includes response headers ([#35](https://github.com/launchdarkly/js-eventsource/issues/35)) ([24787b1](https://github.com/launchdarkly/js-eventsource/commit/24787b1317f037a97dd7416eab650f163347b16f))
+
 ## [2.1.0](https://github.com/launchdarkly/js-eventsource/compare/2.0.3...2.1.0) (2025-04-14)
 
 
