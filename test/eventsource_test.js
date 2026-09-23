@@ -854,6 +854,155 @@ describe('retry delay', () => {
       }
     )
   })
+
+  it('applies a valid retry: value to subsequent reconnect delays', async () => {
+    await withServer(async server => {
+      let connection = 0
+      server.byDefault((req, res) => {
+        connection++
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        if (connection === 1) {
+          res.write('retry: 25\ndata: x\n\n')
+        }
+        setTimeout(() => res.destroy(), 30)
+      })
+
+      await withEventSource(server, { initialRetryDelayMillis: 1 }, async es => {
+        const delays = new AsyncQueue()
+        es.onretrying = event => delays.add(event.delayMillis)
+        assert.equal(await delays.take(), 25)
+      })
+    })
+  })
+})
+
+describe('custom retry delay strategy', () => {
+  function stubStrategy (fixedDelay) {
+    return {
+      nextRetryDelayCalls: [],
+      goodSinceCalls: [],
+      baseDelayCalls: [],
+      nextRetryDelay: function (now) {
+        this.nextRetryDelayCalls.push(now)
+        return fixedDelay
+      },
+      setGoodSince: function (t) {
+        this.goodSinceCalls.push(t)
+      },
+      setBaseDelay: function (ms) {
+        this.baseDelayCalls.push(ms)
+      }
+    }
+  }
+
+  it('is used for reconnect delays in place of the built-in behavior', async () => {
+    const strategy = stubStrategy(7)
+    await withServer(async server => {
+      server.byDefault(TestHttpHandlers.respond(500))
+
+      await withEventSource(server, { retryDelayStrategy: strategy }, async es => {
+        const delays = new AsyncQueue()
+        es.onretrying = event => delays.add(event.delayMillis)
+
+        assert.equal(await delays.take(), 7)
+        assert.equal(await delays.take(), 7)
+        assert.ok(strategy.nextRetryDelayCalls.length >= 2)
+      })
+    })
+  })
+
+  it('ignores the built-in retry delay options when a strategy is provided', async () => {
+    const strategy = stubStrategy(7)
+    await withServer(async server => {
+      server.byDefault(TestHttpHandlers.respond(500))
+
+      await withEventSource(server, { retryDelayStrategy: strategy, initialRetryDelayMillis: 500, jitterRatio: 0.5 }, async es => {
+        const delays = new AsyncQueue()
+        es.onretrying = event => delays.add(event.delayMillis)
+        assert.equal(await delays.take(), 7)
+        assert.equal(await delays.take(), 7)
+      })
+    })
+  })
+
+  it('receives the good-since time once per connection, on the first event', async () => {
+    const strategy = stubStrategy(1)
+    await withServer(async server => {
+      let connection = 0
+      server.byDefault((req, res) => {
+        connection++
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write('data: a\n\n')
+        if (connection === 1) {
+          res.write('data: b\n\n')
+        }
+        setTimeout(() => res.destroy(), 50)
+      })
+
+      await withEventSource(server, { retryDelayStrategy: strategy }, async es => {
+        const messages = startMessageQueue(es)
+        await messages.take()
+        await messages.take()
+        await messages.take()
+        assert.equal(strategy.goodSinceCalls.length, 2)
+      })
+    })
+  })
+
+  it('records exactly one failure when a read timeout is followed by the connection dropping', async () => {
+    const strategy = stubStrategy(10000)
+    await withServer(async server => {
+      server.byDefault((req, res) => {
+        // A stream that never sends anything, so the read timeout elapses. The timeout
+        // handler destroys the request, which produces a second failure signal from the
+        // closing connection; only one of the two may reach the strategy.
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      })
+
+      await withEventSource(server, { retryDelayStrategy: strategy, readTimeoutMillis: 50 }, async es => {
+        const retries = new AsyncQueue()
+        es.onretrying = event => retries.add(event.delayMillis)
+
+        assert.equal(await retries.take(), 10000)
+        await sleepAsync(100)
+        assert.ok(retries.isEmpty())
+        assert.equal(strategy.nextRetryDelayCalls.length, 1)
+      })
+    })
+  })
+
+  it('receives a valid retry: value through setBaseDelay', async () => {
+    const strategy = stubStrategy(1)
+    await withServer(async server => {
+      server.byDefault(writeEvents(['retry: 3000\ndata: x\n\n']))
+      await withEventSource(server, { retryDelayStrategy: strategy }, async es => {
+        await shouldReceiveMessages(es, [ { data: 'x' } ])
+        assert.deepEqual(strategy.baseDelayCalls, [ 3000 ])
+      })
+    })
+  })
+
+  it('ignores retry: values that are not entirely digits', async () => {
+    const strategy = stubStrategy(1)
+    await withServer(async server => {
+      server.byDefault(writeEvents(['retry: -5000\nretry: 12abc\nretry: 1e3\ndata: x\n\n']))
+      await withEventSource(server, { retryDelayStrategy: strategy }, async es => {
+        await shouldReceiveMessages(es, [ { data: 'x' } ])
+        assert.deepEqual(strategy.baseDelayCalls, [])
+      })
+    })
+  })
+
+  it('caps retry: values at one hour', async () => {
+    const strategy = stubStrategy(1)
+    await withServer(async server => {
+      server.byDefault(writeEvents(['retry: 7200000\ndata: x\n\n']))
+      await withEventSource(server, { retryDelayStrategy: strategy }, async es => {
+        await shouldReceiveMessages(es, [ { data: 'x' } ])
+        assert.deepEqual(strategy.baseDelayCalls, [ 3600000 ])
+      })
+    })
+  })
 })
 
 describe('readyState', function () {
@@ -1275,6 +1424,7 @@ describe('EventSource object', function () {
     assert.equal(true, EventSource.supportedOptions.https)
     assert.equal(true, EventSource.supportedOptions.method)
     assert.equal(true, EventSource.supportedOptions.proxy)
+    assert.equal(true, EventSource.supportedOptions.retryDelayStrategy)
     assert.equal(true, EventSource.supportedOptions.skipDefaultHeaders)
     assert.equal(true, EventSource.supportedOptions.withCredentials)
   })

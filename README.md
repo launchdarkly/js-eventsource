@@ -101,6 +101,16 @@ var eventSourceInitDict = {
 };
 ```
 
+### Providing a custom retry delay strategy
+
+Instead of configuring the built-in behavior, an application can take full control of retry timing by providing a `retryDelayStrategy` object in the init options. The object must implement three methods:
+
+* `nextRetryDelay(currentTimeMillis)`: called when a reconnection is about to be scheduled; returns the delay in milliseconds to wait before the next attempt.
+* `setGoodSince(goodSinceTimeMillis)`: called when the first event is received on a connection, indicating that the connection is delivering data.
+* `setBaseDelay(delayMillis)`: called when the server sends a `retry:` field; the value has already been validated and capped at one hour.
+
+When `retryDelayStrategy` is provided it fully replaces the built-in delay behavior, so `initialRetryDelayMillis`, `maxBackoffMillis`, `jitterRatio`, and `retryResetIntervalMillis` have no effect. Most applications should use the built-in options instead.
+
 ### Configuring error retry behavior
 
 By default, to mimic the behavior of built-in browser `EventSource` implementations, `EventSource` will retry if a connection cannot be made or if the connection is broken (using whatever retry behavior you have configured, as described above)-- but if it connects and receives an HTTP error status, it will only retry for statuses 500, 502, 503, or 504; otherwise it will just raise an `error` event and disconnect, so the application is responsible for starting a new connection.
