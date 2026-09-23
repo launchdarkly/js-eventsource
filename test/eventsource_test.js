@@ -717,9 +717,9 @@ describe('Reconnection', () => {
 })
 
 describe('retry delay', () => {
-  async function verifyDelays (options, count, delaysAssertion) {
+  async function verifyDelaysWithHandler (options, handler, count, delaysAssertion) {
     await withServer(async server => {
-      server.byDefault(TestHttpHandlers.respond(500))
+      server.byDefault(handler)
 
       await withEventSource(server, options, async es => {
         const delays = new AsyncQueue()
@@ -732,6 +732,10 @@ describe('retry delay', () => {
         delaysAssertion(allDelays)
       })
     })
+  }
+
+  async function verifyDelays (options, count, delaysAssertion) {
+    await verifyDelaysWithHandler(options, TestHttpHandlers.respond(500), count, delaysAssertion)
   }
 
   it('uses constant delay by default', async () => {
@@ -768,6 +772,85 @@ describe('retry delay', () => {
         assertRange(delay / 2, delay, delays[0])
         assertRange(delay, delay * 2, delays[1])
         assertRange(delay * 2, delay * 4, delays[2])
+      }
+    )
+  })
+
+  it('resets backoff once a connection has been active for the reset interval, measured from its first event', async () => {
+    const delay = 5
+    const resetInterval = 150
+
+    // The first two connections fail immediately, so the backoff progresses. The third
+    // connection delivers events continuously for longer than the reset interval and then
+    // drops; the delay after it must restart at the initial value even though the last
+    // event arrived only moments before the connection dropped.
+    let connection = 0
+    const handler = (req, res) => {
+      connection++
+      if (connection === 3) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write('data: one\n\n')
+        let writes = 0
+        const timer = setInterval(() => {
+          writes++
+          if (writes > 6) {
+            clearInterval(timer)
+            res.destroy()
+          } else {
+            res.write('data: more\n\n')
+          }
+        }, 40)
+      } else {
+        res.writeHead(500)
+        res.end()
+      }
+    }
+
+    await verifyDelaysWithHandler(
+      { initialRetryDelayMillis: delay, maxBackoffMillis: 1000, retryResetIntervalMillis: resetInterval },
+      handler,
+      3,
+      function (delays) {
+        assert.deepEqual(delays, [ delay, delay * 2, delay ])
+      }
+    )
+  })
+
+  it('does not reset backoff for a connection that stays open past the reset interval without delivering events', async () => {
+    const delay = 5
+    const resetInterval = 150
+
+    // The third connection stays open past the reset interval but sends only comment
+    // heartbeats, never an event. An open connection that has delivered no data does not
+    // count as healthy, so the backoff keeps progressing.
+    let connection = 0
+    const handler = (req, res) => {
+      connection++
+      if (connection === 3) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write(':hi\n')
+        let writes = 0
+        const timer = setInterval(() => {
+          writes++
+          if (writes > 6) {
+            clearInterval(timer)
+            res.destroy()
+          } else {
+            res.write(':hi\n')
+          }
+        }, 40)
+      } else {
+        res.writeHead(500)
+        res.end()
+      }
+    }
+
+    await verifyDelaysWithHandler(
+      { initialRetryDelayMillis: delay, maxBackoffMillis: 1000, retryResetIntervalMillis: resetInterval },
+      handler,
+      3,
+      function (delays) {
+        assert.deepEqual(delays, [ delay, delay * 2, delay * 4 ])
       }
     )
   })
