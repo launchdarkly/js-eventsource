@@ -90,13 +90,13 @@ The following additional events may be emitted:
 
 By default, `EventSource` automatically attempts to reconnect if a connection attempt fails or if an existing connection is broken. To prevent a flood of requests, there is always a delay before retrying the connection; the default value for this is 1000 milliseconds.
 
-For backward compatibility, the default behavior is to use the same delay each time. However, it is highly recommended that you enable both exponential backoff (the delay doubles on each successive retry, up to a configurable maximum) and jitter (a random amount is subtracted from each delay), so that if a server outage causes clients to all lose their connections at the same time they will not all retry at the same time. The backoff can also be configured to reset back to the initial delay if the stream has remained active for some amount of time.
+For backward compatibility, the default behavior is to use the same delay each time. However, it is highly recommended that you enable both exponential backoff (the delay doubles on each successive retry, up to a configurable maximum) and jitter (a random amount is subtracted from each delay), so that if a server outage causes clients to all lose their connections at the same time they will not all retry at the same time. The backoff can also be configured to reset back to the initial delay once a connection has remained active for some amount of time, measured from the first event received on that connection.
 
 ```javascript
 var eventSourceInitDict = {
   initialRetryDelayMillis: 2000,   // sets initial retry delay to 2 seconds
   maxBackoffMillis: 30000,         // enables backoff, with a maximum of 30 seconds
-  retryResetIntervalMillis: 60000, // backoff will reset to initial level if stream got an event at least 60 seconds before failing
+  retryResetIntervalMillis: 60000, // backoff resets to the initial delay once a connection has been active for 60 seconds, measured from its first event
   jitterRatio: 0.5                 // each delay will be reduced by a randomized jitter of up to 50%
 };
 ```
