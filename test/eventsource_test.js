@@ -3,6 +3,7 @@ var EventSource = require('../lib/eventsource').EventSource
 var bufferFrom = require('buffer-from')
 var mocha = require('mocha')
 var assert = require('assert')
+var http = require('http')
 var tunnel = require('tunnel')
 const { AsyncQueue, TestHttpHandlers, TestHttpServers, sleepAsync, withCloseable } =
   require('launchdarkly-js-test-helpers')
@@ -25,6 +26,15 @@ async function withEventSource (server, opts, action) {
   es.onerror = () => {}
 
   await withCloseable(es, action || opts)
+}
+
+async function withKeepAliveAgent (action) {
+  const agent = new http.Agent({ keepAlive: true })
+  try {
+    await action(agent)
+  } finally {
+    agent.destroy()
+  }
 }
 
 async function waitForOpenEvent (es) {
@@ -64,6 +74,13 @@ function writeEvents (chunks, headers = {}) {
   const q = new AsyncQueue()
   chunks.forEach(chunk => q.add(chunk))
   return TestHttpHandlers.chunkedStream(200, resHeaders, q)
+}
+
+function notifyOnSocketClose (queue, handler) {
+  return (req, res) => {
+    res.socket.on('close', () => queue.add(true))
+    handler(req, res)
+  }
 }
 
 function assertRange (min, max, value) {
@@ -526,6 +543,38 @@ describe('HTTP Request', () => {
           const errors = startErrorQueue(es)
           const err = await errors.take()
           assert.equal(err.status, status)
+        })
+      })
+    })
+
+    it('closes the connection of an http ' + status + ' redirect', async () => {
+      const redirectSuffix = '/foobar'
+
+      await withKeepAliveAgent(async agent => {
+        await withServer(async server => {
+          const closed = new AsyncQueue()
+          server.forMethodAndPath('get', '/', notifyOnSocketClose(closed,
+            TestHttpHandlers.respond(status, {'Location': server.url + redirectSuffix})))
+          server.forMethodAndPath('get', redirectSuffix, writeEvents(['data: hello\n\n']))
+
+          await withEventSource(server, { agent }, async es => {
+            await closed.take()
+          })
+        })
+      })
+    })
+  });
+
+  [301, 307, 401, 503].forEach(function (status) {
+    it('closes the connection when response status is ' + status, async () => {
+      await withKeepAliveAgent(async agent => {
+        await withServer(async server => {
+          const closed = new AsyncQueue()
+          server.byDefault(notifyOnSocketClose(closed, TestHttpHandlers.respond(status)))
+
+          await withEventSource(server, { agent }, async es => {
+            await closed.take()
+          })
         })
       })
     })
