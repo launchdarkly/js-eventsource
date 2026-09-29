@@ -2,6 +2,20 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.3.0](https://github.com/launchdarkly/js-eventsource/compare/2.2.0...2.3.0) (2026-09-29)
+
+
+### Features
+
+* allow a custom retry delay strategy to be provided ([#40](https://github.com/launchdarkly/js-eventsource/issues/40)) ([dd081f0](https://github.com/launchdarkly/js-eventsource/commit/dd081f08122ac369ec2b34a318ef529a3ca4ca3d))
+
+
+### Bug Fixes
+
+* anchor retry backoff reset to the first event of each connection ([#38](https://github.com/launchdarkly/js-eventsource/issues/38)) ([9d46860](https://github.com/launchdarkly/js-eventsource/commit/9d468601bcd9b5198bdd6f1f73ca0e485e6cfff3))
+* destroy non-200 responses so their sockets close ([c0ba67c](https://github.com/launchdarkly/js-eventsource/commit/c0ba67c02647f502b35f58994d2f09912dd21c5d))
+* destroy non-200 responses so their sockets close ([#42](https://github.com/launchdarkly/js-eventsource/issues/42)) ([988a7b3](https://github.com/launchdarkly/js-eventsource/commit/988a7b3417274f7e9997117f08be01da4a513183))
+
 ## [2.2.0](https://github.com/launchdarkly/js-eventsource/compare/2.1.0...2.2.0) (2025-04-25)
 
 
