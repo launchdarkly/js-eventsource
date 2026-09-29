@@ -8,6 +8,9 @@ on:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Create the release branch/tag.
+      pull-requests: write # Open and update the release PR.
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
     steps:
