@@ -21,9 +21,11 @@ app.get('/', (req, res) => {
     'capabilities': [
       'event-type-listeners',
       'headers',
+      'last-event-id',
       'post',
       'read-timeout',
       'report',
+      'server-directed-shutdown-request',
     ]
   })
 });
