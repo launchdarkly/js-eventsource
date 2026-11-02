@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.4.0](https://github.com/launchdarkly/js-eventsource/compare/2.3.0...2.4.0) (2026-11-02)
+
+
+### Features
+
+* Advertise server-directed-shutdown-request and last-event-id in SSE contract test service ([#45](https://github.com/launchdarkly/js-eventsource/issues/45)) ([0b44bcb](https://github.com/launchdarkly/js-eventsource/commit/0b44bcbadfbb9f3abc3520b71df157fbb93555b7))
+
 ## [2.3.0](https://github.com/launchdarkly/js-eventsource/compare/2.2.0...2.3.0) (2026-09-29)
 
 
