@@ -59,6 +59,12 @@ function StreamEntity(options) {
   if (options.initialDelayMs) {
     eventSourceParams.initialRetryDelayMillis = options.initialDelayMs;
   }
+  if (options.lastEventId) {
+    // The client seeds Last-Event-ID from config.headers.
+    eventSourceParams.headers = Object.assign({}, eventSourceParams.headers, {
+      'Last-Event-ID': options.lastEventId,
+    });
+  }
 
   s.onMessage = event => {
     log(`Received message from stream (${event.type})`);
